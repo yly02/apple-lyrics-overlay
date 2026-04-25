@@ -1,5 +1,4 @@
-// swift-tools-version: 6.3
-// The swift-tools-version declares the minimum version of Swift required to build this package.
+// swift-tools-version: 6.1
 
 import PackageDescription
 
@@ -9,9 +8,7 @@ let package = Package(
         .macOS(.v15),
     ],
     targets: [
-        .executableTarget(
-            name: "apple-lyrics-overlay"
-        ),
+        .executableTarget(name: "apple-lyrics-overlay"),
     ],
     swiftLanguageModes: [.v6]
 )
