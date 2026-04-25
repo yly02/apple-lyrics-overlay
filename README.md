@@ -2,7 +2,8 @@
 
 A lightweight macOS menu bar app that brings Apple Music lyrics onto the desktop in a clean floating overlay.
 
-![Apple Music Lyrics Overlay screenshot](docs/overlay-screenshot.png)
+![Apple Music Lyrics Overlay screenshot 1](docs/overlay-shot-1.png)
+![Apple Music Lyrics Overlay screenshot 2](docs/overlay-shot-2.png)
 
 ## What it does
 
