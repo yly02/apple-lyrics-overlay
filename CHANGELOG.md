@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.0.1 - 2026-04-26
+
+- Refined repository metadata for public distribution
+- Added manual and automated release support for downloadable builds
+- Improved release packaging and version tracking
+
 ## 1.0.0 - 2026-04-25
 
 - Initial public-ready release
