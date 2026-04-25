@@ -1,38 +1,100 @@
 # Apple Music Desktop Lyrics Overlay
 
-This is a lightweight macOS overlay for Apple Music that shows two rows of lyrics in a floating desktop window.
+A lightweight macOS menu bar app that brings Apple Music lyrics onto the desktop in a clean floating overlay.
 
-- Top row: current lyric line
-- Bottom row: simplified Chinese translation when the current line is not already Chinese
+![Apple Music Lyrics Overlay screenshot](docs/overlay-screenshot.png)
 
-How it works:
+## What it does
 
-- Reads the current Apple Music track and playback position through AppleScript.
-- Fetches synced lyrics through a pluggable lyric-source layer. The current provider is LRCLIB, with normalized title/artist matching to make future providers easier to add.
-- Uses a configurable translation pipeline for Simplified Chinese output, with local caching and fallback providers.
+- Shows the current lyric line in a desktop overlay that stays above normal windows
+- Shows Simplified Chinese translation for non-Chinese lyrics
+- Falls back across multiple lyric sources to improve coverage
+- Keeps credentials local and out of the repository
+- Lets you adjust font, color, width, animation, lock state, and appearance from the menu bar
 
-Run it:
+## Highlights
+
+- `Real-time sync` Reads the current Apple Music track and playback position through AppleScript
+- `Translation pipeline` Supports built-in translation flow, Tencent API configuration, retries, timeout fallback, and local caches
+- `Desktop-first UI` Floating lyric overlay with blur styling, menu bar controls, and remembered window position
+- `Safer storage` Translation credentials live in the local Keychain/Application Support, not in Git
+- `Double-click launch` Can be built into a standalone `.app` bundle for everyday use
+
+## Requirements
+
+- macOS 15.0 or later
+- Apple Music app
+- Swift 6.3 / Xcode toolchain with Swift Package Manager
+
+## Run locally
 
 ```bash
 ./run-overlay.sh
 ```
 
-Build a double-clickable app bundle on your Desktop:
+## Build the app bundle
 
 ```bash
 ./build-app.sh
 ```
 
-Notes:
+By default this creates:
 
-- Drag the overlay window to reposition it.
-- The app bundle is created at `~/Desktop/Apple Music Lyrics.app`.
-- The app lives in the menu bar and can show or hide the lyrics window.
-- You can change the lyric bar size from the menu bar under `歌词大小`.
-- You can choose a custom lyric font from the menu bar under `歌词字体`.
-- You can customize lyric base color and gradient color from the menu bar under `歌词颜色`, using the macOS color picker.
-- You can lock or unlock the overlay position from the menu bar under `固定歌词位置`.
-- Translation API credentials are stored locally in the user's Keychain/Application Support, not in this repository.
-- The window stays above normal desktop windows.
-- Some songs may not have synced lyrics available from LRCLIB.
-- If a translation provider is unavailable or a line is unsupported, the app simply keeps the original line instead of showing an error banner.
+```text
+~/Desktop/Apple Music Lyrics.app
+```
+
+## Main features
+
+- `Lyrics overlay`
+  - Shows the current line on the desktop
+  - Supports translation line display for English, Japanese, Korean, and other non-Chinese lyrics
+  - Can show song title and artist while switching tracks
+
+- `Customization`
+  - Lyric size presets
+  - Custom font selection
+  - Base color and gradient color via the macOS color picker
+  - Light, dark, or follow-system appearance
+  - Multiple lyric animation modes
+  - Lock and unlock overlay position
+
+- `Stability work`
+  - Prefetches translations to reduce visible lag
+  - Retries failed translation requests once
+  - Uses timeout downgrade so one slow line does not block the whole overlay
+  - Remembers the last window position, including multi-display handling
+
+- `Fallbacks`
+  - LRCLIB
+  - Apple Music local lyrics field
+  - lyrics.ovh plain-text fallback
+  - Persistent local caches for lyrics and translation results
+
+## Privacy and security
+
+- No API keys or secrets are committed in this repository
+- Translation credentials are stored locally in:
+  - macOS Keychain
+  - the user's Application Support directory
+- Build output, app bundles, `.env` files, and Swift build artifacts are ignored by Git
+
+## Project structure
+
+```text
+Sources/apple-lyrics-overlay/apple_lyrics_overlay.swift   Main app implementation
+Resources/                                                App resources
+Tests/apple-lyrics-overlayTests/                          Package tests
+build-app.sh                                              Build standalone app bundle
+run-overlay.sh                                            Run in development mode
+```
+
+## Notes
+
+- Some songs may still have no synced lyrics, depending on source availability
+- When translation is unavailable, the app keeps the original lyric instead of showing an error banner
+- Apple Music permissions may be required the first time the app reads playback state
+
+## License
+
+MIT. See [LICENSE](LICENSE).
