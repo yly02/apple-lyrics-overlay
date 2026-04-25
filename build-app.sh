@@ -5,6 +5,10 @@ ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
 APP_NAME="Apple Music Lyrics.app"
 EXECUTABLE_NAME="AppleMusicLyrics"
 OUTPUT_PATH="${1:-$HOME/Desktop/$APP_NAME}"
+APP_VERSION="$(tr -d '[:space:]' < "$ROOT_DIR/VERSION" 2>/dev/null || true)"
+if [ -z "$APP_VERSION" ]; then
+    APP_VERSION="1.0.0"
+fi
 CONTENTS_DIR="$OUTPUT_PATH/Contents"
 MACOS_DIR="$CONTENTS_DIR/MacOS"
 RESOURCES_DIR="$CONTENTS_DIR/Resources"
@@ -40,9 +44,9 @@ cat >"$CONTENTS_DIR/Info.plist" <<PLIST
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-    <string>1.0</string>
+    <string>$APP_VERSION</string>
     <key>CFBundleVersion</key>
-    <string>1</string>
+    <string>$APP_VERSION</string>
     <key>LSMinimumSystemVersion</key>
     <string>15.0</string>
     <key>LSUIElement</key>

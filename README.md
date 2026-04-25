@@ -1,100 +1,164 @@
 # Apple Music Desktop Lyrics Overlay
 
-A lightweight macOS menu bar app that brings Apple Music lyrics onto the desktop in a clean floating overlay.
+一个可直接运行的 macOS 桌面歌词工具：把 Apple Music 的歌词和简体中文翻译显示在桌面悬浮层里。
 
 ![Apple Music Lyrics Overlay screenshot 1](docs/overlay-shot-1.png)
 ![Apple Music Lyrics Overlay screenshot 2](docs/overlay-shot-2.png)
 
-## What it does
+## 这是什么
 
-- Shows the current lyric line in a desktop overlay that stays above normal windows
-- Shows Simplified Chinese translation for non-Chinese lyrics
-- Falls back across multiple lyric sources to improve coverage
-- Keeps credentials local and out of the repository
-- Lets you adjust font, color, width, animation, lock state, and appearance from the menu bar
+- 菜单栏常驻的 Apple Music 桌面歌词应用
+- 支持原文 + 简体中文翻译双排显示
+- 支持歌词栏大小、字体、颜色、渐变、主题、动效、锁定位置
+- 支持多种歌词兜底来源，提高无歌词歌曲的覆盖率
+- 翻译凭据只保存在本地，不进仓库
 
-## Highlights
+## 给普通用户：如何下载使用
 
-- `Real-time sync` Reads the current Apple Music track and playback position through AppleScript
-- `Translation pipeline` Supports built-in translation flow, Tencent API configuration, retries, timeout fallback, and local caches
-- `Desktop-first UI` Floating lyric overlay with blur styling, menu bar controls, and remembered window position
-- `Safer storage` Translation credentials live in the local Keychain/Application Support, not in Git
-- `Double-click launch` Can be built into a standalone `.app` bundle for everyday use
+### 方法 1：直接下载已打包版本
 
-## Requirements
+进入 GitHub 仓库的 `Releases` 页面，下载：
 
-- macOS 15.0 or later
-- Apple Music app
-- Swift 6.3 / Xcode toolchain with Swift Package Manager
+```text
+Apple-Music-Lyrics-<version>-macOS.zip
+```
 
-## Run locally
+解压后把 `Apple Music Lyrics.app` 拖到 `Applications` 或任意你喜欢的位置，然后双击运行。
+
+首次运行时，macOS 可能会要求你允许：
+
+- Apple Events / 自动化控制 `Music`
+- 辅助功能或相关桌面显示权限
+
+允许后即可使用。
+
+### 方法 2：从源码构建
+
+要求：
+
+- macOS 15.0 或更高
+- Xcode / Swift 6.3 工具链
+
+运行开发版：
 
 ```bash
 ./run-overlay.sh
 ```
 
-## Build the app bundle
+构建可双击启动的 `.app`：
 
 ```bash
 ./build-app.sh
 ```
 
-By default this creates:
+默认会生成：
 
 ```text
 ~/Desktop/Apple Music Lyrics.app
 ```
 
-## Main features
+## 功能概览
 
-- `Lyrics overlay`
-  - Shows the current line on the desktop
-  - Supports translation line display for English, Japanese, Korean, and other non-Chinese lyrics
-  - Can show song title and artist while switching tracks
+### 歌词显示
 
-- `Customization`
-  - Lyric size presets
-  - Custom font selection
-  - Base color and gradient color via the macOS color picker
-  - Light, dark, or follow-system appearance
-  - Multiple lyric animation modes
-  - Lock and unlock overlay position
+- 桌面悬浮歌词
+- 跟随 Apple Music 当前播放进度
+- 切歌时可显示歌名与歌手
+- 中文歌词可只显示一行
+- 英文、日文、韩文等非中文歌词可显示原文 + 简体中文翻译
 
-- `Stability work`
-  - Prefetches translations to reduce visible lag
-  - Retries failed translation requests once
-  - Uses timeout downgrade so one slow line does not block the whole overlay
-  - Remembers the last window position, including multi-display handling
+### 自定义能力
 
-- `Fallbacks`
+- 歌词大小预设
+- 自定义字体
+- 自定义基础色和渐变色
+- 跟随系统 / 始终浅色 / 始终深色
+- 多种歌词切换动效
+- 锁定 / 解锁歌词栏位置
+- 记住上次窗口位置，支持多显示器
+
+### 稳定性与兜底
+
+- 预取当前句和下一句翻译，降低延迟
+- 翻译请求超时自动降级，避免整条歌词卡住
+- 翻译失败自动重试一次
+- 本地持久化歌词缓存和翻译缓存
+- 多种歌词来源兜底：
   - LRCLIB
-  - Apple Music local lyrics field
-  - lyrics.ovh plain-text fallback
-  - Persistent local caches for lyrics and translation results
+  - Apple Music 本地歌词字段
+  - lyrics.ovh
 
-## Privacy and security
+## 翻译说明
 
-- No API keys or secrets are committed in this repository
-- Translation credentials are stored locally in:
+- 目标翻译统一输出为简体中文
+- 翻译开关可在菜单栏中直接控制
+- 翻译配置可在 `翻译设置…` 中修改
+- 如果你配置了翻译 API，凭据会保存在本机：
   - macOS Keychain
-  - the user's Application Support directory
-- Build output, app bundles, `.env` files, and Swift build artifacts are ignored by Git
+  - 用户目录的 Application Support
 
-## Project structure
+这些内容不会被提交到 GitHub。
+
+## 隐私与安全
+
+- 仓库中不包含真实 API Key、Secret、密码或 token
+- `.env`、构建产物、缓存、`.app`、`.build`、`dist` 都已被 Git 忽略
+- README 截图只保留歌词栏本身，不包含其他桌面内容
+
+## 项目结构
 
 ```text
-Sources/apple-lyrics-overlay/apple_lyrics_overlay.swift   Main app implementation
-Resources/                                                App resources
-Tests/apple-lyrics-overlayTests/                          Package tests
-build-app.sh                                              Build standalone app bundle
-run-overlay.sh                                            Run in development mode
+Sources/apple-lyrics-overlay/apple_lyrics_overlay.swift   主程序
+Resources/                                                菜单栏图标等资源
+scripts/build-release.sh                                  打包发布脚本
+build-app.sh                                              构建 .app
+run-overlay.sh                                            开发运行
+VERSION                                                   当前版本号
+CHANGELOG.md                                              版本变更记录
 ```
 
-## Notes
+## 给仓库维护者：如何发版
 
-- Some songs may still have no synced lyrics, depending on source availability
-- When translation is unavailable, the app keeps the original lyric instead of showing an error banner
-- Apple Music permissions may be required the first time the app reads playback state
+### 本地打包
+
+```bash
+./scripts/build-release.sh
+```
+
+会生成：
+
+```text
+dist/Apple Music Lyrics.app
+dist/Apple-Music-Lyrics-<version>-macOS.zip
+dist/Apple-Music-Lyrics-<version>-macOS.zip.sha256
+```
+
+### 手动上传到 GitHub Release
+
+1. 先运行 `./scripts/build-release.sh`
+2. 打开 GitHub 仓库的 `Releases`
+3. 新建一个版本，例如 `v1.0.0`
+4. 上传生成的 zip 和 sha256 文件
+
+## 常见问题
+
+### 1. 为什么有些歌没有歌词
+
+并不是所有歌曲都能从外部歌词源拿到同步歌词。应用已经做了多路兜底，但仍可能遇到无歌词歌曲。
+
+### 2. 为什么第一次运行会弹权限请求
+
+因为应用需要读取 Apple Music 当前播放状态，并把歌词显示在桌面层，这些都需要 macOS 权限授权。
+
+### 3. 为什么仓库里没有翻译 API 密钥
+
+出于安全考虑，所有翻译凭据都只保存在本机，不会写入仓库。
+
+## 版本
+
+当前版本：`1.0.0`
+
+详细更新见 [CHANGELOG.md](CHANGELOG.md)。
 
 ## License
 
