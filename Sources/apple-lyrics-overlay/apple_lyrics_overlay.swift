@@ -28,6 +28,13 @@ private struct LyricLine: Equatable {
 }
 
 private struct LRCLibResult: Decodable {
+    let id: Int?
+    let name: String?
+    let trackName: String?
+    let artistName: String?
+    let albumName: String?
+    let duration: TimeInterval?
+    let plainLyrics: String?
     let syncedLyrics: String?
 }
 
@@ -320,6 +327,53 @@ private func normalizedTranslationText(_ text: String) -> String {
     }
 
     return normalized
+}
+
+private func normalizedLyricComparisonText(_ text: String) -> String {
+    let folded = text
+        .folding(options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive], locale: .current)
+        .lowercased()
+    let stripped = folded.replacingOccurrences(
+        of: #"[^\p{L}\p{N}\p{Han}\p{Hiragana}\p{Katakana}\p{Hangul}]+"#,
+        with: " ",
+        options: .regularExpression
+    )
+    return stripped
+        .replacingOccurrences(of: #"\s{2,}"#, with: " ", options: .regularExpression)
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+}
+
+private func compactLyricComparisonText(_ text: String) -> String {
+    normalizedLyricComparisonText(text).replacingOccurrences(of: " ", with: "")
+}
+
+private func lyricLineSimilarity(_ lhs: String, _ rhs: String) -> Double {
+    let leftCompact = compactLyricComparisonText(lhs)
+    let rightCompact = compactLyricComparisonText(rhs)
+
+    guard !leftCompact.isEmpty, !rightCompact.isEmpty else {
+        return 0
+    }
+
+    if leftCompact == rightCompact {
+        return 1
+    }
+
+    if leftCompact.contains(rightCompact) || rightCompact.contains(leftCompact) {
+        let shorter = min(leftCompact.count, rightCompact.count)
+        let longer = max(leftCompact.count, rightCompact.count)
+        return Double(shorter) / Double(longer)
+    }
+
+    let leftTokens = Set(normalizedLyricComparisonText(lhs).split(separator: " ").map(String.init))
+    let rightTokens = Set(normalizedLyricComparisonText(rhs).split(separator: " ").map(String.init))
+
+    guard !leftTokens.isEmpty, !rightTokens.isEmpty else {
+        return 0
+    }
+
+    let overlap = leftTokens.intersection(rightTokens).count
+    return Double(overlap) / Double(max(leftTokens.count, rightTokens.count))
 }
 
 @MainActor
@@ -1768,6 +1822,8 @@ private actor LyricsClient {
     private let providers = LyricsProviderKind.allCases
     private var cache: [String: LyricFetchResult] = [:]
     private let persistentCache = LyricsPersistentCache.shared
+    private let minimumLRCLibCandidateScore = 8.5
+    private let minimumCorrectedCoverage = 0.22
 
     func lyrics(for snapshot: MusicSnapshot, localLyrics: String?) async throws -> LyricsPayload {
         let localPlainLyrics = localLyrics.flatMap { lyrics in
@@ -1782,7 +1838,7 @@ private actor LyricsClient {
         }
 
         for query in LyricLookupQuery(snapshot: snapshot).candidateQueries() {
-            if let fetched = try await fetchLyrics(for: query, localPlainLyrics: localPlainLyrics) {
+            if let fetched = try await fetchLyrics(for: query, snapshot: snapshot, localPlainLyrics: localPlainLyrics) {
                 cache[query.cacheKey] = fetched
                 return fetched.payload
             }
@@ -1791,11 +1847,15 @@ private actor LyricsClient {
         return .none
     }
 
-    private func fetchLyrics(for query: LyricLookupQuery, localPlainLyrics: [String]?) async throws -> LyricFetchResult? {
+    private func fetchLyrics(
+        for query: LyricLookupQuery,
+        snapshot: MusicSnapshot,
+        localPlainLyrics: [String]?
+    ) async throws -> LyricFetchResult? {
         for provider in providers {
             switch provider {
             case .lrclib:
-                if let lines = try await fetchLRCLibLyrics(for: query) {
+                if let lines = try await fetchLRCLibLyrics(for: query, snapshot: snapshot, localPlainLyrics: localPlainLyrics) {
                     return LyricFetchResult(provider: provider, payload: .synced(lines))
                 }
             case .musicLocal:
@@ -1822,20 +1882,60 @@ private actor LyricsClient {
         return nil
     }
 
-    private func fetchLRCLibLyrics(for query: LyricLookupQuery) async throws -> [LyricLine]? {
-        if let result = try await fetchLRCLibGet(query: query),
-           let syncedLyrics = result.syncedLyrics,
-           !syncedLyrics.isEmpty {
-            return parseLRC(syncedLyrics)
+    private func fetchLRCLibLyrics(
+        for query: LyricLookupQuery,
+        snapshot: MusicSnapshot,
+        localPlainLyrics: [String]?
+    ) async throws -> [LyricLine]? {
+        var candidates: [LRCLibResult] = []
+
+        if let result = try await fetchLRCLibGet(query: query) {
+            candidates.append(result)
         }
 
-        if let result = try await fetchLRCLibSearch(query: query),
-           let syncedLyrics = result.syncedLyrics,
-           !syncedLyrics.isEmpty {
-            return parseLRC(syncedLyrics)
+        let searchResults = try await fetchLRCLibSearch(query: query)
+        if !searchResults.isEmpty {
+            candidates.append(contentsOf: searchResults)
         }
 
-        return nil
+        var bestLines: [LyricLine]?
+        var bestScore = minimumLRCLibCandidateScore
+        var bestCoverage = 0.0
+
+        for result in deduplicatedLRCLibResults(candidates) {
+            guard
+                let syncedLyrics = result.syncedLyrics,
+                !syncedLyrics.isEmpty
+            else {
+                continue
+            }
+
+            let parsedLines = parseLRC(syncedLyrics)
+            guard !parsedLines.isEmpty else {
+                continue
+            }
+
+            let candidatePlainLyrics = candidatePlainLines(for: result, parsedLines: parsedLines)
+            let score = scoreLRCLibCandidate(
+                result,
+                query: query,
+                snapshot: snapshot,
+                localPlainLyrics: localPlainLyrics,
+                candidatePlainLyrics: candidatePlainLyrics
+            )
+
+            let correction = correctedSyncedLyrics(parsedLines, using: localPlainLyrics)
+            let chosenLines = correction.lines
+            let coverage = correction.coverage
+
+            if score > bestScore || (abs(score - bestScore) < 0.001 && coverage > bestCoverage) {
+                bestScore = score
+                bestCoverage = coverage
+                bestLines = chosenLines
+            }
+        }
+
+        return bestLines
     }
 
     private func fetchLyricsOVHPlainLyrics(for query: LyricLookupQuery) async throws -> [String]? {
@@ -1893,7 +1993,7 @@ private actor LyricsClient {
         }
     }
 
-    private func fetchLRCLibSearch(query: LyricLookupQuery) async throws -> LRCLibResult? {
+    private func fetchLRCLibSearch(query: LyricLookupQuery) async throws -> [LRCLibResult] {
         var components = URLComponents(string: "https://lrclib.net/api/search")
         components?.queryItems = [
             URLQueryItem(name: "track_name", value: query.title),
@@ -1904,13 +2004,17 @@ private actor LyricsClient {
             throw AppError.emptyResponse
         }
 
-        let (data, response) = try await URLSession.shared.data(from: url)
-        guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
-            return nil
-        }
+        do {
+            let (data, response) = try await URLSession.shared.data(from: url)
+            guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
+                return []
+            }
 
-        let results = try decoder.decode([LRCLibResult].self, from: data)
-        return results.first { ($0.syncedLyrics?.isEmpty == false) }
+            let results = try decoder.decode([LRCLibResult].self, from: data)
+            return results.filter { $0.syncedLyrics?.isEmpty == false }
+        } catch {
+            return []
+        }
     }
 
     private func parseLRC(_ raw: String) -> [LyricLine] {
@@ -1996,6 +2100,220 @@ private actor LyricsClient {
         }
 
         return parsed
+    }
+
+    private func deduplicatedLRCLibResults(_ results: [LRCLibResult]) -> [LRCLibResult] {
+        var deduplicated: [LRCLibResult] = []
+        var seen: Set<String> = []
+
+        for result in results {
+            let key = lrclibDeduplicationKey(for: result)
+            guard seen.insert(key).inserted else {
+                continue
+            }
+
+            deduplicated.append(result)
+        }
+
+        return deduplicated
+    }
+
+    private func lrclibDeduplicationKey(for result: LRCLibResult) -> String {
+        if let id = result.id {
+            return "id:\(id)"
+        }
+
+        let track = normalizedLyricComparisonText(result.trackName ?? result.name ?? "")
+        let artist = normalizedLyricComparisonText(result.artistName ?? "")
+        let album = normalizedLyricComparisonText(result.albumName ?? "")
+        let duration = String(format: "%.2f", result.duration ?? 0)
+        let syncedPrefix = compactLyricComparisonText(String((result.syncedLyrics ?? "").prefix(64)))
+        return [track, artist, album, duration, syncedPrefix].joined(separator: "|")
+    }
+
+    private func candidatePlainLines(for result: LRCLibResult, parsedLines: [LyricLine]) -> [String] {
+        if let plainLyrics = result.plainLyrics {
+            let parsed = parsePlainLyrics(plainLyrics)
+            if !parsed.isEmpty {
+                return parsed
+            }
+        }
+
+        return parsedLines.map(\.text)
+    }
+
+    private func scoreLRCLibCandidate(
+        _ result: LRCLibResult,
+        query: LyricLookupQuery,
+        snapshot: MusicSnapshot,
+        localPlainLyrics: [String]?,
+        candidatePlainLyrics: [String]
+    ) -> Double {
+        var score = 0.0
+        score += weightedMetadataScore(candidate: result.trackName ?? result.name, expected: query.title, exact: 5.0, partial: 3.2)
+        score += weightedMetadataScore(candidate: result.artistName, expected: query.artist, exact: 4.0, partial: 2.5)
+        score += weightedMetadataScore(candidate: result.albumName, expected: query.album, exact: 1.4, partial: 0.8)
+        score += durationScore(candidateDuration: result.duration, expectedDuration: snapshot.duration)
+
+        if let localPlainLyrics {
+            score += lyricAlignmentScore(candidatePlainLyrics: candidatePlainLyrics, localPlainLyrics: localPlainLyrics) * 6.5
+        }
+
+        return score
+    }
+
+    private func weightedMetadataScore(
+        candidate: String?,
+        expected: String,
+        exact: Double,
+        partial: Double
+    ) -> Double {
+        let expectedNormalized = normalizedLyricComparisonText(expected)
+        let candidateNormalized = normalizedLyricComparisonText(candidate ?? "")
+
+        guard !expectedNormalized.isEmpty, !candidateNormalized.isEmpty else {
+            return 0
+        }
+
+        if expectedNormalized == candidateNormalized {
+            return exact
+        }
+
+        let expectedCompact = expectedNormalized.replacingOccurrences(of: " ", with: "")
+        let candidateCompact = candidateNormalized.replacingOccurrences(of: " ", with: "")
+        if expectedCompact == candidateCompact {
+            return exact
+        }
+
+        if expectedCompact.contains(candidateCompact) || candidateCompact.contains(expectedCompact) {
+            let shorter = min(expectedCompact.count, candidateCompact.count)
+            let longer = max(expectedCompact.count, candidateCompact.count)
+            return partial * (Double(shorter) / Double(longer))
+        }
+
+        let tokenScore = lyricLineSimilarity(expectedNormalized, candidateNormalized)
+        return partial * tokenScore
+    }
+
+    private func durationScore(candidateDuration: TimeInterval?, expectedDuration: TimeInterval) -> Double {
+        guard
+            let candidateDuration,
+            candidateDuration > 0,
+            expectedDuration > 0
+        else {
+            return 0
+        }
+
+        let delta = abs(candidateDuration - expectedDuration)
+        switch delta {
+        case ..<1.5:
+            return 4.0
+        case ..<4:
+            return 3.0
+        case ..<8:
+            return 1.8
+        case ..<15:
+            return 0.6
+        default:
+            return -2.5
+        }
+    }
+
+    private func lyricAlignmentScore(candidatePlainLyrics: [String], localPlainLyrics: [String]) -> Double {
+        let candidate = candidatePlainLyrics.filter { !compactLyricComparisonText($0).isEmpty }
+        let local = localPlainLyrics.filter { !compactLyricComparisonText($0).isEmpty }
+
+        guard !candidate.isEmpty, !local.isEmpty else {
+            return 0
+        }
+
+        let limitedCandidate = Array(candidate.prefix(14))
+        var localSearchStart = 0
+        var matches = 0
+
+        for line in limitedCandidate {
+            guard localSearchStart < local.count else {
+                break
+            }
+
+            if let matchedIndex = bestLocalMatchIndex(
+                for: line,
+                in: local,
+                startingAt: localSearchStart,
+                minimumScore: 0.82
+            ) {
+                matches += 1
+                localSearchStart = matchedIndex + 1
+            }
+        }
+
+        return Double(matches) / Double(max(1, limitedCandidate.count))
+    }
+
+    private func correctedSyncedLyrics(_ syncedLines: [LyricLine], using localPlainLyrics: [String]?) -> (lines: [LyricLine], coverage: Double) {
+        guard
+            let localPlainLyrics,
+            !localPlainLyrics.isEmpty
+        else {
+            return (syncedLines, 0)
+        }
+
+        var corrected = syncedLines
+        var localSearchStart = 0
+        var matches = 0
+
+        for index in corrected.indices {
+            guard localSearchStart < localPlainLyrics.count else {
+                break
+            }
+
+            if let localIndex = bestLocalMatchIndex(
+                for: corrected[index].text,
+                in: localPlainLyrics,
+                startingAt: localSearchStart,
+                minimumScore: 0.88
+            ) {
+                corrected[index] = LyricLine(timestamp: corrected[index].timestamp, text: localPlainLyrics[localIndex])
+                localSearchStart = localIndex + 1
+                matches += 1
+            }
+        }
+
+        let coverageBase = min(corrected.count, localPlainLyrics.count)
+        let coverage = Double(matches) / Double(max(1, coverageBase))
+        guard coverage >= minimumCorrectedCoverage else {
+            return (syncedLines, coverage)
+        }
+
+        return (corrected, coverage)
+    }
+
+    private func bestLocalMatchIndex(
+        for text: String,
+        in localPlainLyrics: [String],
+        startingAt startIndex: Int,
+        minimumScore: Double
+    ) -> Int? {
+        guard startIndex < localPlainLyrics.count else {
+            return nil
+        }
+
+        var bestIndex: Int?
+        var bestScore = minimumScore
+
+        for index in startIndex..<localPlainLyrics.count {
+            let score = lyricLineSimilarity(text, localPlainLyrics[index])
+            if score > bestScore {
+                bestScore = score
+                bestIndex = index
+            }
+
+            if score >= 0.995 {
+                return index
+            }
+        }
+
+        return bestIndex
     }
 }
 
@@ -2608,6 +2926,10 @@ private struct OverlayRootView: View {
         let cardShadowColor = colorScheme == .dark ? Color.black.opacity(0.10) : Color.black.opacity(0.14)
         let showsLyricBarBackground = settings.showsLyricBarBackground
         let lyricAnimationMode = settings.lyricAnimationMode
+        let showsSharedLyricAura = !showsLyricBarBackground && !displayedBottomLine.isEmpty
+        let lyricPairSpacing = displayedBottomLine.isEmpty ? metrics.lineSpacing : metrics.lineSpacing + 2.4
+        let secondaryFontSize = displayedBottomLine.isEmpty ? metrics.bottomFontSize : metrics.bottomFontSize * 0.93
+        let secondaryMinHeight = secondaryFontSize * 1.06
 
         ZStack {
             RoundedRectangle(cornerRadius: metrics.cornerRadius, style: .continuous)
@@ -2617,7 +2939,7 @@ private struct OverlayRootView: View {
                         .stroke(Color.white.opacity(OverlayStyle.borderOpacity), lineWidth: 1)
                 )
 
-            VStack(spacing: metrics.lineSpacing) {
+            VStack(spacing: lyricPairSpacing) {
                 AnimatedLyricContent(
                     identity: "top|\(displayedTopLine)",
                     mode: lyricAnimationMode,
@@ -2640,12 +2962,13 @@ private struct OverlayRootView: View {
                 ) {
                     SecondaryFloatingLyricText(
                         text: displayedBottomLine,
-                        font: settings.bottomFont(size: metrics.bottomFontSize),
-                        minHeight: metrics.bottomFontSize * 1.08,
-                        isVisible: !displayedBottomLine.isEmpty
+                        font: settings.bottomFont(size: secondaryFontSize),
+                        minHeight: secondaryMinHeight,
+                        isVisible: !displayedBottomLine.isEmpty,
+                        emphasizesContrast: !showsLyricBarBackground
                     )
                 }
-                    .frame(maxWidth: .infinity, minHeight: metrics.bottomFontSize * 1.08)
+                    .frame(maxWidth: .infinity, minHeight: secondaryMinHeight)
             }
             .padding(.horizontal, metrics.horizontalPadding)
             .padding(.vertical, metrics.verticalPadding)
@@ -2689,6 +3012,15 @@ private struct OverlayRootView: View {
                     }
                     .shadow(color: cardShadowColor, radius: 14, x: 0, y: 6)
                     .allowsHitTesting(false)
+                } else if showsSharedLyricAura {
+                    // Keep the pair readable with one shared, soft aura so the effect
+                    // stays airy instead of looking like two separate labels.
+                    Capsule(style: .continuous)
+                        .fill(Color.black.opacity(colorScheme == .dark ? 0.12 : 0.08))
+                        .blur(radius: colorScheme == .dark ? 16 : 14)
+                        .scaleEffect(x: 0.72, y: 0.64, anchor: .center)
+                        .offset(y: metrics.bottomFontSize * 0.46)
+                        .allowsHitTesting(false)
                 }
             }
         }
@@ -2852,10 +3184,10 @@ private struct PrimaryFloatingLyricText: View {
 
     var body: some View {
         let displayText = text.isEmpty ? " " : text
-        let highlightColor = colorScheme == .dark ? Color.white.opacity(0.13) : Color.white.opacity(0.16)
-        let outlineColor = Color.black.opacity(colorScheme == .dark ? 0.48 : 0.34)
-        let primaryShadowColor = Color.black.opacity(colorScheme == .dark ? 0.48 : 0.26)
-        let secondaryShadowColor = Color.black.opacity(colorScheme == .dark ? 0.13 : 0.06)
+        let highlightColor = colorScheme == .dark ? Color.white.opacity(0.14) : Color.white.opacity(0.18)
+        let outlineColor = Color.black.opacity(colorScheme == .dark ? 0.44 : 0.28)
+        let primaryShadowColor = Color.black.opacity(colorScheme == .dark ? 0.40 : 0.22)
+        let secondaryShadowColor = Color.black.opacity(colorScheme == .dark ? 0.10 : 0.045)
 
         ZStack {
             Text(displayText)
@@ -2872,7 +3204,7 @@ private struct PrimaryFloatingLyricText: View {
                 font: font,
                 color: outlineColor,
                 weight: .medium,
-                blur: 0.14
+                blur: 0.10
             )
 
             Text(displayText)
@@ -2890,8 +3222,8 @@ private struct PrimaryFloatingLyricText: View {
                 .multilineTextAlignment(.center)
                 .lineLimit(2)
                 .minimumScaleFactor(0.5)
-                .shadow(color: primaryShadowColor, radius: 3.1, x: 0, y: 1.7)
-                .shadow(color: secondaryShadowColor, radius: 5.4, x: 0, y: 3.1)
+                .shadow(color: primaryShadowColor, radius: 2.6, x: 0, y: 1.4)
+                .shadow(color: secondaryShadowColor, radius: 4.2, x: 0, y: 2.4)
         }
         .frame(maxWidth: .infinity, minHeight: minHeight)
     }
@@ -2961,13 +3293,22 @@ private struct SecondaryFloatingLyricText: View {
     let font: Font
     let minHeight: CGFloat
     let isVisible: Bool
+    let emphasizesContrast: Bool
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         let displayText = text.isEmpty ? " " : text
-        let textColor = Color.white.opacity(0.94)
-        let outlineColor = Color.black.opacity(0.46)
-        let primaryShadowColor = Color.black.opacity(0.34)
-        let secondaryShadowColor = Color.black.opacity(0.10)
+        let textColor = Color.white.opacity(colorScheme == .dark ? 0.92 : (emphasizesContrast ? 0.965 : 0.955))
+        let outlineColor = colorScheme == .dark
+            ? Color.black.opacity(emphasizesContrast ? 0.26 : 0.36)
+            : Color.black.opacity(emphasizesContrast ? 0.34 : 0.46)
+        let primaryShadowColor = colorScheme == .dark
+            ? Color.black.opacity(emphasizesContrast ? 0.15 : 0.22)
+            : Color.black.opacity(emphasizesContrast ? 0.17 : 0.28)
+        let secondaryShadowColor = colorScheme == .dark
+            ? Color.black.opacity(emphasizesContrast ? 0.05 : 0.08)
+            : Color.black.opacity(emphasizesContrast ? 0.06 : 0.11)
+        let outlineBlur = colorScheme == .dark ? 0.05 : (emphasizesContrast ? 0.01 : 0.08)
 
         ZStack {
             ContrastOutlineTextLayer(
@@ -2975,7 +3316,7 @@ private struct SecondaryFloatingLyricText: View {
                 font: font,
                 color: outlineColor,
                 weight: .medium,
-                blur: 0.12
+                blur: outlineBlur
             )
 
             Text(displayText)
@@ -2985,8 +3326,8 @@ private struct SecondaryFloatingLyricText: View {
                 .multilineTextAlignment(.center)
                 .lineLimit(2)
                 .minimumScaleFactor(0.5)
-                .shadow(color: primaryShadowColor, radius: 2.0, x: 0, y: 1.1)
-                .shadow(color: secondaryShadowColor, radius: 3.6, x: 0, y: 2.2)
+                .shadow(color: primaryShadowColor, radius: colorScheme == .dark ? 1.0 : (emphasizesContrast ? 1.2 : 1.8), x: 0, y: 0.55)
+                .shadow(color: secondaryShadowColor, radius: colorScheme == .dark ? 1.6 : (emphasizesContrast ? 1.9 : 2.8), x: 0, y: colorScheme == .dark ? 0.9 : 1.2)
         }
         .opacity(isVisible ? 1 : 0)
         .frame(maxWidth: .infinity, minHeight: minHeight)
