@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.0.2 - 2026-04-26
+
+- Improved LRCLIB lyric matching with candidate scoring and local lyric-based auto-correction
+- Refined floating lyric rendering for a cleaner Apple-like look in lyrics-only mode
+- Smoothed translation phrasing for common lyric fillers and short repeated English hooks
+
 ## 1.0.1 - 2026-04-26
 
 - Refined repository metadata for public distribution
