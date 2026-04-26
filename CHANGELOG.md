@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.0.3 - 2026-04-26
+
+- Made the locked lyric overlay click-through so it no longer blocks interaction with covered apps
+
 ## 1.0.2 - 2026-04-26
 
 - Improved LRCLIB lyric matching with candidate scoring and local lyric-based auto-correction
