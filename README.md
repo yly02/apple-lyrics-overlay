@@ -2,8 +2,27 @@
 
 一个可直接运行的 macOS 桌面歌词工具：把 Apple Music 的歌词和简体中文翻译显示在桌面悬浮层里。
 
-![Apple Music Lyrics Overlay screenshot 1](docs/overlay-shot-1.png)
-![Apple Music Lyrics Overlay screenshot 2](docs/overlay-shot-2.png)
+[![Release](https://img.shields.io/github/v/release/yly02/apple-lyrics-overlay?display_name=tag)](https://github.com/yly02/apple-lyrics-overlay/releases/tag/v1.0.2)
+[![License](https://img.shields.io/github/license/yly02/apple-lyrics-overlay)](LICENSE)
+[![Platform](https://img.shields.io/badge/macOS-15%2B-111827)](https://github.com/yly02/apple-lyrics-overlay/releases/tag/v1.0.2)
+[![Swift](https://img.shields.io/badge/Swift-6.1%2B-F97316)](Package.swift)
+
+![Apple Music Lyrics Overlay showcase](docs/readme-showcase.png)
+
+## 项目亮点
+
+- 菜单栏常驻，跟随 Apple Music 当前播放状态
+- 非中文歌词可显示原文 + 简体中文双排翻译
+- LRCLIB + Apple Music 本地歌词 + lyrics.ovh 多路兜底
+- 更稳的同步歌词候选匹配与自动纠错
+- 更自然的歌词翻译润色，减少生硬直译
+- 支持字体、字号、颜色、渐变、主题、动效和锁定位置
+
+## 截图
+
+| 双排翻译 | 仅显示歌词 |
+| --- | --- |
+| ![Apple Music Lyrics Overlay screenshot 1](docs/overlay-shot-1.png) | ![Apple Music Lyrics Overlay screenshot 2](docs/overlay-shot-2.png) |
 
 ## 这是什么
 
@@ -18,7 +37,7 @@
 
 ### 方法 1：直接下载已打包版本
 
-进入 GitHub 仓库的 `Releases` 页面，下载：
+进入 GitHub 仓库的 [Releases](https://github.com/yly02/apple-lyrics-overlay/releases) 页面，下载：
 
 ```text
 Apple-Music-Lyrics-<version>-macOS.zip
@@ -91,6 +110,13 @@ Apple-Music-Lyrics-<version>-macOS.zip
   - Apple Music 本地歌词字段
   - lyrics.ovh
 
+### 更适合日常使用的细节
+
+- 登录启动后可自动挂到菜单栏
+- 记住歌词栏位置，支持多显示器回位
+- 主题可跟随系统，也可强制浅色 / 深色
+- 翻译、位置锁定、收藏当前歌曲等操作可直接从菜单栏完成
+
 ## 翻译说明
 
 - 目标翻译统一输出为简体中文
@@ -161,6 +187,7 @@ dist/Apple-Music-Lyrics-<version>-macOS.zip.sha256
 
 当前版本：`1.0.2`
 最新发布：[`v1.0.2`](https://github.com/yly02/apple-lyrics-overlay/releases/tag/v1.0.2)
+下载地址：[`Apple-Music-Lyrics-1.0.2-macOS.zip`](https://github.com/yly02/apple-lyrics-overlay/releases/download/v1.0.2/Apple-Music-Lyrics-1.0.2-macOS.zip)
 
 详细更新见 [CHANGELOG.md](CHANGELOG.md)。
 
