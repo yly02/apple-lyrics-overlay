@@ -329,6 +329,192 @@ private func normalizedTranslationText(_ text: String) -> String {
     return normalized
 }
 
+private func polishedLyricTranslation(_ translatedText: String, sourceText: String) -> String {
+    let sourceTrimmed = sourceText.trimmingCharacters(in: .whitespacesAndNewlines)
+    var polished = normalizedTranslationText(translatedText)
+    guard !sourceTrimmed.isEmpty, !polished.isEmpty else {
+        return polished
+    }
+
+    if let idiomaticTranslation = lyricIdiomTranslation(for: sourceTrimmed) {
+        return idiomaticTranslation
+    }
+
+    if let fillerTranslation = translatedFillerLine(for: sourceTrimmed) {
+        return fillerTranslation
+    }
+
+    let normalizedSource = sourceTrimmed
+        .folding(options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive], locale: .current)
+        .lowercased()
+
+    if normalizedSource.range(of: #"^(yeah|yea|yee|yep|yes)\b"#, options: .regularExpression) != nil {
+        polished = polished.replacingOccurrences(
+            of: #"^是的(?=[，,\s!！?？]|$)"#,
+            with: "对",
+            options: .regularExpression
+        )
+    }
+
+    if normalizedSource.range(
+        of: #"(oh|ooh|ah)\s+(lord|god)\b|oh\s+my\s+god"#,
+        options: .regularExpression
+    ) != nil {
+        polished = polished.replacingOccurrences(
+            of: #"^(哦|噢|啊)[，,\s]*(主啊|上帝|我的天|天哪)"#,
+            with: "天啊",
+            options: .regularExpression
+        )
+    }
+
+    let phraseRewrites: [(String, String)] = [
+        (#"^是的[，,\s]*(耶|呀|啊|哦|喔)$"#, "$1"),
+        (#"^对[，,\s]*(耶|呀|啊|哦|喔)$"#, "$1"),
+        (#"^哦[，,\s]*上帝$"#, "天啊"),
+        (#"^噢[，,\s]*上帝$"#, "天啊"),
+        (#"^哦[，,\s]*主啊$"#, "天啊"),
+        (#"^噢[，,\s]*主啊$"#, "天啊"),
+        (#"^哦[，,\s]*我的天$"#, "天啊"),
+        (#"^噢[，,\s]*我的天$"#, "天啊"),
+        (#"^宝贝啊$"#, "宝贝"),
+        (#"^我的宝贝$"#, "宝贝"),
+    ]
+
+    for (pattern, replacement) in phraseRewrites {
+        polished = polished.replacingOccurrences(
+            of: pattern,
+            with: replacement,
+            options: .regularExpression
+        )
+    }
+
+    polished = polished
+        .replacingOccurrences(of: #"([，、])\1+"#, with: "$1", options: .regularExpression)
+        .replacingOccurrences(of: #"\s{2,}"#, with: " ", options: .regularExpression)
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+
+    return normalizedTranslationText(polished)
+}
+
+private func lyricIdiomTranslation(for sourceText: String) -> String? {
+    let normalizedSource = sourceText
+        .folding(options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive], locale: .current)
+        .lowercased()
+        .replacingOccurrences(of: #"[^\p{L}\p{N}'\s]+"#, with: " ", options: .regularExpression)
+        .replacingOccurrences(of: #"\s{2,}"#, with: " ", options: .regularExpression)
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+
+    guard !normalizedSource.isEmpty else {
+        return nil
+    }
+
+    let exactMatches: [String: String] = [
+        "run away": "逃开",
+        "hold on": "撑住",
+        "let me go": "放开我",
+        "save me": "救救我",
+        "set me free": "还我自由",
+        "wake me up": "唤醒我",
+        "take me home": "带我回家",
+        "stay with me": "留在我身边",
+        "come back to me": "回到我身边",
+        "break my heart": "伤透我的心",
+        "kiss me": "吻我",
+        "love me": "爱我",
+        "need you": "我需要你",
+        "miss you": "我想你",
+        "without you": "没有你",
+        "too late": "太迟了",
+        "on my own": "独自一人",
+        "in my heart": "在我心里",
+        "be alright": "会好的",
+        "its alright": "没事的",
+        "it's alright": "没事的",
+        "its okay": "没事的",
+        "it's okay": "没事的",
+        "dont let go": "别放手",
+        "don't let go": "别放手",
+        "cant let go": "放不下",
+        "can't let go": "放不下",
+    ]
+
+    if let exact = exactMatches[normalizedSource] {
+        return exact
+    }
+
+    let patternMatches: [(String, String)] = [
+        (#"^run away(?:\s+run away)+$"#, "逃开，逃开"),
+        (#"^hold on(?:\s+hold on)+$"#, "撑住，撑住"),
+        (#"^let me go(?:\s+let me go)+$"#, "放开我，放开我"),
+        (#"^stay with me(?:\s+stay with me)+$"#, "留在我身边，别走"),
+        (#"^come back(?:\s+to me)?$"#, "回来吧"),
+        (#"^come back to me(?:\s+come back to me)+$"#, "回到我身边"),
+        (#"^take me home(?:\s+take me home)+$"#, "带我回家"),
+        (#"^i miss you$"#, "我想你"),
+        (#"^i need you$"#, "我需要你"),
+        (#"^i love you$"#, "我爱你"),
+        (#"^i want you$"#, "我想要你"),
+        (#"^i need your love$"#, "我需要你的爱"),
+        (#"^don't leave me$|^dont leave me$"#, "别离开我"),
+        (#"^don't break my heart$|^dont break my heart$"#, "别伤我的心"),
+        (#"^don't let me go$|^dont let me go$"#, "别放开我"),
+        (#"^don't wake me up$|^dont wake me up$"#, "别叫醒我"),
+        (#"^give me love$"#, "给我一点爱"),
+        (#"^give me your love$"#, "把你的爱给我"),
+        (#"^set me free(?:\s+set me free)+$"#, "还我自由"),
+        (#"^save me(?:\s+save me)+$"#, "救救我"),
+    ]
+
+    for (pattern, replacement) in patternMatches {
+        if normalizedSource.range(of: pattern, options: .regularExpression) != nil {
+            return replacement
+        }
+    }
+
+    return nil
+}
+
+private func translatedFillerLine(for sourceText: String) -> String? {
+    let normalizedSource = sourceText
+        .folding(options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive], locale: .current)
+        .lowercased()
+    let tokens = normalizedSource
+        .split(whereSeparator: { !$0.isLetter && $0 != "'" })
+        .map(String.init)
+
+    guard !tokens.isEmpty else {
+        return nil
+    }
+
+    let mappedTokens = tokens.compactMap { lyricFillerTranslation(for: $0) }
+    guard mappedTokens.count == tokens.count else {
+        return nil
+    }
+
+    return mappedTokens.joined(separator: "，")
+}
+
+private func lyricFillerTranslation(for token: String) -> String? {
+    switch token {
+    case "yeah", "yea", "yee", "ye", "yep", "yes":
+        return "耶"
+    case "oh", "ooh", "oooh", "ooooh", "woah", "whoa":
+        return "哦"
+    case "ah", "aah", "aaah":
+        return "啊"
+    case "hey", "ayy":
+        return "嘿"
+    case "woo", "wooo", "woohoo", "wooh":
+        return "呜呼"
+    case "la", "lalala", "na", "nana", "nah":
+        return "啦"
+    case "mm", "mmm", "hmm", "hm", "uh", "huh":
+        return "嗯"
+    default:
+        return nil
+    }
+}
+
 private func normalizedLyricComparisonText(_ text: String) -> String {
     let folded = text
         .folding(options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive], locale: .current)
@@ -579,23 +765,23 @@ private actor TranslationPersistentCache {
             return nil
         }
 
-        let normalized = normalizedTranslationText(cached)
-        if normalized.isEmpty {
+        let polished = polishedLyricTranslation(cached, sourceText: text)
+        if polished.isEmpty {
             return nil
         }
 
-        return normalized
+        return polished
     }
 
     func store(_ translatedText: String, for text: String) {
-        let normalized = normalizedTranslationText(translatedText)
-        guard !normalized.isEmpty else {
+        let polished = polishedLyricTranslation(translatedText, sourceText: text)
+        guard !polished.isEmpty else {
             return
         }
 
         let cacheKey = key(for: text)
         cache.removeValue(forKey: cacheKey)
-        cache[cacheKey] = normalized
+        cache[cacheKey] = polished
 
         while cache.count > maxEntries, let oldestKey = cache.keys.first {
             cache.removeValue(forKey: oldestKey)
@@ -632,14 +818,20 @@ private actor TranslationFallbackClient {
         }
 
         if let translated = await tencentClient.translate(trimmed) {
-            return translated
+            let polished = polishedLyricTranslation(translated, sourceText: trimmed)
+            return polished.isEmpty ? translated : polished
         }
 
         guard let sourceLanguage = sourceLanguage(for: trimmed) else {
             return nil
         }
 
-        return await translateWithMyMemory(trimmed, sourceLanguage: sourceLanguage)
+        if let translated = await translateWithMyMemory(trimmed, sourceLanguage: sourceLanguage) {
+            let polished = polishedLyricTranslation(translated, sourceText: trimmed)
+            return polished.isEmpty ? translated : polished
+        }
+
+        return nil
     }
 
     private func normalizeToSimplifiedChineseIfNeeded(_ text: String) -> String? {
