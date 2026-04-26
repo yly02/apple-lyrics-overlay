@@ -11,6 +11,7 @@
 - 支持原文 + 简体中文翻译双排显示
 - 支持歌词栏大小、字体、颜色、渐变、主题、动效、锁定位置
 - 支持多种歌词兜底来源，提高无歌词歌曲的覆盖率
+- 支持歌词自动纠错和更自然的翻译润色
 - 翻译凭据只保存在本地，不进仓库
 
 ## 给普通用户：如何下载使用
@@ -37,7 +38,7 @@ Apple-Music-Lyrics-<version>-macOS.zip
 要求：
 
 - macOS 15.0 或更高
-- Xcode / Swift 6.3 工具链
+- Xcode / Swift 6.1 或更高工具链
 
 运行开发版：
 
@@ -66,6 +67,7 @@ Apple-Music-Lyrics-<version>-macOS.zip
 - 切歌时可显示歌名与歌手
 - 中文歌词可只显示一行
 - 英文、日文、韩文等非中文歌词可显示原文 + 简体中文翻译
+- 更稳的同步歌词匹配与自动纠错，减少错句/错版本
 
 ### 自定义能力
 
@@ -83,6 +85,7 @@ Apple-Music-Lyrics-<version>-macOS.zip
 - 翻译请求超时自动降级，避免整条歌词卡住
 - 翻译失败自动重试一次
 - 本地持久化歌词缓存和翻译缓存
+- 常见英文短句与语气词会做歌词化润色，减少生硬直译
 - 多种歌词来源兜底：
   - LRCLIB
   - Apple Music 本地歌词字段
@@ -156,7 +159,8 @@ dist/Apple-Music-Lyrics-<version>-macOS.zip.sha256
 
 ## 版本
 
-当前版本：`1.0.0`
+当前版本：`1.0.2`
+最新发布：[`v1.0.2`](https://github.com/yly02/apple-lyrics-overlay/releases/tag/v1.0.2)
 
 详细更新见 [CHANGELOG.md](CHANGELOG.md)。
 
