@@ -2,9 +2,9 @@
 
 一个可直接运行的 macOS 桌面歌词工具：把 Apple Music 的歌词和简体中文翻译显示在桌面悬浮层里。
 
-[![Release](https://img.shields.io/github/v/release/yly02/apple-lyrics-overlay?display_name=tag)](https://github.com/yly02/apple-lyrics-overlay/releases/tag/v1.0.2)
+[![Release](https://img.shields.io/github/v/release/yly02/apple-lyrics-overlay?display_name=tag)](https://github.com/yly02/apple-lyrics-overlay/releases/tag/v1.0.3)
 [![License](https://img.shields.io/github/license/yly02/apple-lyrics-overlay)](LICENSE)
-[![Platform](https://img.shields.io/badge/macOS-15%2B-111827)](https://github.com/yly02/apple-lyrics-overlay/releases/tag/v1.0.2)
+[![Platform](https://img.shields.io/badge/macOS-15%2B-111827)](https://github.com/yly02/apple-lyrics-overlay/releases/tag/v1.0.3)
 [![Swift](https://img.shields.io/badge/Swift-6.1%2B-F97316)](Package.swift)
 
 ![Apple Music Lyrics Overlay showcase](docs/readme-showcase.png)
@@ -205,9 +205,9 @@ dist/Apple-Music-Lyrics-<version>-macOS.zip.sha256
 
 ## 版本
 
-当前版本：`1.0.2`
-最新发布：[`v1.0.2`](https://github.com/yly02/apple-lyrics-overlay/releases/tag/v1.0.2)
-下载地址：[`Apple-Music-Lyrics-1.0.2-macOS.zip`](https://github.com/yly02/apple-lyrics-overlay/releases/download/v1.0.2/Apple-Music-Lyrics-1.0.2-macOS.zip)
+当前版本：`1.0.3`
+最新发布：[`v1.0.3`](https://github.com/yly02/apple-lyrics-overlay/releases/tag/v1.0.3)
+下载地址：[`Apple-Music-Lyrics-1.0.3-macOS.zip`](https://github.com/yly02/apple-lyrics-overlay/releases/download/v1.0.3/Apple-Music-Lyrics-1.0.3-macOS.zip)
 
 详细更新见 [CHANGELOG.md](CHANGELOG.md)。
 
