@@ -3772,7 +3772,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelega
         window.level = .floating
         window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
         window.isMovableByWindowBackground = !settings.isPositionLocked
-        window.ignoresMouseEvents = false
+        window.ignoresMouseEvents = settings.isPositionLocked
         window.titleVisibility = .hidden
         window.titlebarAppearsTransparent = true
         window.delegate = self
@@ -4292,6 +4292,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelega
     private func syncPositionLockState() {
         positionLockMenuItem?.state = settings.isPositionLocked ? .on : .off
         window?.isMovableByWindowBackground = !settings.isPositionLocked
+        window?.ignoresMouseEvents = settings.isPositionLocked
     }
 
     private func syncFontMenuState() {
