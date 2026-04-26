@@ -2805,6 +2805,43 @@ private struct OverlayRootView: View {
     }
 }
 
+private let contrastOutlineOffsets: [CGSize] = [
+    CGSize(width: -0.72, height: 0),
+    CGSize(width: 0.72, height: 0),
+    CGSize(width: 0, height: -0.72),
+    CGSize(width: 0, height: 0.72),
+    CGSize(width: -0.56, height: -0.56),
+    CGSize(width: 0.56, height: -0.56),
+    CGSize(width: -0.56, height: 0.56),
+    CGSize(width: 0.56, height: 0.56),
+]
+
+private struct ContrastOutlineTextLayer: View {
+    let text: String
+    let font: Font
+    let color: Color
+    let weight: Font.Weight
+    let blur: CGFloat
+
+    var body: some View {
+        ZStack {
+            ForEach(0..<contrastOutlineOffsets.count, id: \.self) { index in
+                let offset = contrastOutlineOffsets[index]
+                Text(text)
+                    .font(font)
+                    .fontWeight(weight)
+                    .foregroundStyle(color)
+                    .multilineTextAlignment(.center)
+                    .lineLimit(2)
+                    .minimumScaleFactor(0.5)
+                    .offset(x: offset.width, y: offset.height)
+            }
+        }
+        .blur(radius: blur)
+        .allowsHitTesting(false)
+    }
+}
+
 private struct PrimaryFloatingLyricText: View {
     let text: String
     let font: Font
@@ -2815,9 +2852,10 @@ private struct PrimaryFloatingLyricText: View {
 
     var body: some View {
         let displayText = text.isEmpty ? " " : text
-        let highlightColor = colorScheme == .dark ? Color.white.opacity(0.18) : Color.white.opacity(0.38)
-        let primaryShadowColor = colorScheme == .dark ? Color.black.opacity(0.52) : Color.black.opacity(0.18)
-        let secondaryShadowColor = colorScheme == .dark ? Color.black.opacity(0.10) : Color.black.opacity(0.06)
+        let highlightColor = colorScheme == .dark ? Color.white.opacity(0.13) : Color.white.opacity(0.16)
+        let outlineColor = Color.black.opacity(colorScheme == .dark ? 0.48 : 0.34)
+        let primaryShadowColor = Color.black.opacity(colorScheme == .dark ? 0.48 : 0.26)
+        let secondaryShadowColor = Color.black.opacity(colorScheme == .dark ? 0.13 : 0.06)
 
         ZStack {
             Text(displayText)
@@ -2828,6 +2866,14 @@ private struct PrimaryFloatingLyricText: View {
                 .minimumScaleFactor(0.5)
                 .blur(radius: 5)
                 .allowsHitTesting(false)
+
+            ContrastOutlineTextLayer(
+                text: displayText,
+                font: font,
+                color: outlineColor,
+                weight: .medium,
+                blur: 0.14
+            )
 
             Text(displayText)
                 .font(font)
@@ -2844,8 +2890,8 @@ private struct PrimaryFloatingLyricText: View {
                 .multilineTextAlignment(.center)
                 .lineLimit(2)
                 .minimumScaleFactor(0.5)
-                .shadow(color: primaryShadowColor, radius: 3.5, x: 0, y: 2)
-                .shadow(color: secondaryShadowColor, radius: 7, x: 0, y: 4)
+                .shadow(color: primaryShadowColor, radius: 3.1, x: 0, y: 1.7)
+                .shadow(color: secondaryShadowColor, radius: 5.4, x: 0, y: 3.1)
         }
         .frame(maxWidth: .infinity, minHeight: minHeight)
     }
@@ -2915,33 +2961,35 @@ private struct SecondaryFloatingLyricText: View {
     let font: Font
     let minHeight: CGFloat
     let isVisible: Bool
-    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         let displayText = text.isEmpty ? " " : text
-        let textColor = colorScheme == .dark ? Color.white.opacity(0.74) : Color.black.opacity(0.68)
-        let highlightColor = colorScheme == .dark ? Color.white.opacity(0.10) : Color.white.opacity(0.45)
-        let primaryShadowColor = colorScheme == .dark ? Color.black.opacity(0.44) : Color.black.opacity(0.12)
-        let secondaryShadowColor = colorScheme == .dark ? Color.black.opacity(0.08) : Color.black.opacity(0.04)
+        let textColor = Color.white.opacity(0.94)
+        let outlineColor = Color.black.opacity(0.46)
+        let primaryShadowColor = Color.black.opacity(0.34)
+        let secondaryShadowColor = Color.black.opacity(0.10)
 
-        Text(displayText)
-            .font(font)
-            .foregroundStyle(textColor)
-            .multilineTextAlignment(.center)
-            .lineLimit(2)
-            .minimumScaleFactor(0.5)
-            .overlay {
-                Text(displayText)
-                    .font(font)
-                    .foregroundStyle(highlightColor)
-                    .blur(radius: 2)
-                    .offset(y: -0.3)
-                    .allowsHitTesting(false)
-            }
-            .shadow(color: primaryShadowColor, radius: 2.5, x: 0, y: 1.5)
-            .shadow(color: secondaryShadowColor, radius: 5, x: 0, y: 3)
-            .opacity(isVisible ? 1 : 0)
-            .frame(maxWidth: .infinity, minHeight: minHeight)
+        ZStack {
+            ContrastOutlineTextLayer(
+                text: displayText,
+                font: font,
+                color: outlineColor,
+                weight: .medium,
+                blur: 0.12
+            )
+
+            Text(displayText)
+                .font(font)
+                .fontWeight(.medium)
+                .foregroundStyle(textColor)
+                .multilineTextAlignment(.center)
+                .lineLimit(2)
+                .minimumScaleFactor(0.5)
+                .shadow(color: primaryShadowColor, radius: 2.0, x: 0, y: 1.1)
+                .shadow(color: secondaryShadowColor, radius: 3.6, x: 0, y: 2.2)
+        }
+        .opacity(isVisible ? 1 : 0)
+        .frame(maxWidth: .infinity, minHeight: minHeight)
     }
 }
 
