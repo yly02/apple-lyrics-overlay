@@ -982,6 +982,93 @@ private enum TencentCredentialsStore {
     }
 }
 
+private enum LaunchAgentHelper {
+    private static let label = "com.yly02.applemusiclyricsoverlay.launchagent"
+
+    static func isInstalled() -> Bool {
+        FileManager.default.fileExists(atPath: plistURL.path)
+    }
+
+    static func installCurrentApp() throws {
+        let bundlePath = Bundle.main.bundlePath
+        guard bundlePath.hasSuffix(".app") else {
+            throw CocoaError(.fileNoSuchFile)
+        }
+
+        try FileManager.default.createDirectory(
+            at: plistURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+
+        let plist: [String: Any] = [
+            "Label": label,
+            "ProgramArguments": ["/usr/bin/open", bundlePath],
+            "RunAtLoad": true,
+            "KeepAlive": false,
+            "LimitLoadToSessionType": ["Aqua"],
+            "ProcessType": "Interactive",
+        ]
+
+        let data = try PropertyListSerialization.data(
+            fromPropertyList: plist,
+            format: .xml,
+            options: 0
+        )
+        try data.write(to: plistURL, options: .atomic)
+        try? FileManager.default.setAttributes(
+            [.posixPermissions: 0o644],
+            ofItemAtPath: plistURL.path
+        )
+
+        reloadCurrentSession()
+    }
+
+    static func uninstall() {
+        unloadCurrentSession()
+        try? FileManager.default.removeItem(at: plistURL)
+    }
+
+    private static var plistURL: URL {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/LaunchAgents", isDirectory: true)
+            .appendingPathComponent("\(label).plist", isDirectory: false)
+    }
+
+    private static var launchctlPath: String {
+        FileManager.default.fileExists(atPath: "/bin/launchctl") ? "/bin/launchctl" : "/usr/bin/launchctl"
+    }
+
+    private static var guiDomain: String {
+        "gui/\(getuid())"
+    }
+
+    private static func reloadCurrentSession() {
+        unloadCurrentSession()
+        runLaunchctl(["bootstrap", guiDomain, plistURL.path])
+        runLaunchctl(["kickstart", "-k", "\(guiDomain)/\(label)"])
+    }
+
+    private static func unloadCurrentSession() {
+        runLaunchctl(["bootout", guiDomain, plistURL.path])
+        runLaunchctl(["bootout", "\(guiDomain)/\(label)"])
+    }
+
+    private static func runLaunchctl(_ arguments: [String]) {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: launchctlPath)
+        process.arguments = arguments
+        process.standardOutput = Pipe()
+        process.standardError = Pipe()
+
+        do {
+            try process.run()
+            process.waitUntilExit()
+        } catch {
+            // Best effort background registration.
+        }
+    }
+}
+
 private actor TencentTranslationClient {
     private let decoder = JSONDecoder()
     private let host = "tmt.tencentcloudapi.com"
@@ -1916,6 +2003,27 @@ private enum AppInstanceLock {
 
     static var relaunchNotification: Notification.Name {
         relaunchNotificationName
+    }
+}
+
+private enum HelperBridge {
+    static let commandNotification = Notification.Name("com.yly02.applemusiclyricsoverlay.helper.command")
+    static let snapshotNotification = Notification.Name("com.yly02.applemusiclyricsoverlay.helper.snapshot")
+    static let quitHelperNotification = Notification.Name("com.yly02.applemusiclyricsoverlay.helper.quit")
+
+    static let commandKey = "command"
+    static let trackTitleKey = "trackTitle"
+    static let trackArtistKey = "trackArtist"
+    static let translationEnabledKey = "translationEnabled"
+    static let positionLockedKey = "positionLocked"
+
+    enum Command: String {
+        case requestSnapshot
+        case showOverlay
+        case togglePositionLock
+        case toggleTranslation
+        case openTranslationSettings
+        case quitMainApp
     }
 }
 
@@ -3068,27 +3176,14 @@ private final class OverlayViewModel: ObservableObject {
             return false
         }
 
-        let containsHan = trimmed.range(of: #"\p{Han}"#, options: .regularExpression) != nil
         let containsForeignScript = trimmed.range(
             of: #"\p{Latin}|\p{Hangul}|[\p{Hiragana}\p{Katakana}]|\p{Cyrillic}|\p{Greek}|\p{Arabic}|\p{Hebrew}|\p{Thai}|\p{Devanagari}"#,
             options: .regularExpression
         ) != nil
 
-        if containsForeignScript {
-            return true
-        }
-
-        guard containsHan else {
-            return false
-        }
-
-        guard
-            let converted = trimmed.applyingTransform(StringTransform(rawValue: "Traditional-Simplified"), reverse: false)
-        else {
-            return false
-        }
-
-        return converted != trimmed
+        // Chinese lyrics should stay single-line. Only non-Chinese scripts
+        // need a translated second line.
+        return containsForeignScript
     }
 }
 
@@ -3635,9 +3730,10 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelega
     private var cancellables: Set<AnyCancellable> = []
     private var appliedContentWidth: CGFloat?
     private var statusItemMonitorTimer: Timer?
-    private let model = OverlayViewModel()
-    private let settings = OverlaySettings()
-    private let translationSettingsModel = TranslationSettingsPanelModel()
+    private var lockedOverlayContextMonitor: Any?
+    private lazy var model = OverlayViewModel()
+    private lazy var settings = OverlaySettings()
+    private lazy var translationSettingsModel = TranslationSettingsPanelModel()
 
     private func desiredContentWidth() -> CGFloat {
         settings.contentWidth(
@@ -3750,6 +3846,32 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelega
             name: AppInstanceLock.relaunchNotification,
             object: nil
         )
+        DistributedNotificationCenter.default().addObserver(
+            self,
+            selector: #selector(handleHelperCommand(_:)),
+            name: HelperBridge.commandNotification,
+            object: nil
+        )
+
+        configureStatusItem()
+        ensureStatusItemVisible()
+        scheduleStatusItemBootstrap()
+        startStatusItemMonitor()
+        finishLaunchingOverlay()
+        applyLaunchAtLoginPreference(enabled: settings.launchAtLoginEnabled)
+        syncLaunchAtLoginMenuState()
+        launchMenuBarHelper()
+        postHelperSnapshot()
+    }
+
+    func applicationDidBecomeActive(_ notification: Notification) {
+        ensureStatusItemVisible()
+    }
+
+    private func finishLaunchingOverlay() {
+        guard window == nil else {
+            return
+        }
 
         let contentView = OverlayRootView(model: model, settings: settings)
         let hostingView = OverlayHostingView(rootView: contentView)
@@ -3780,59 +3902,46 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelega
         self.window = window
         self.hostingView = hostingView
         hostingView.menuProvider = { [weak self] in
-            self?.statusItem?.menu
+            self?.statusMenu
         }
         applyWindowAppearance()
         window.makeKeyAndOrderFront(nil)
+        configureLockedOverlayContextMonitor()
         model.start()
-        ensureStatusItemVisible()
-        startStatusItemMonitor()
         bindMenuState()
         resizeWindowToFitContent(animated: false, immediate: true)
-    }
-
-    func applicationDidBecomeActive(_ notification: Notification) {
-        ensureStatusItemVisible()
     }
 
     func applicationWillTerminate(_ notification: Notification) {
         persistWindowPosition()
         statusItemMonitorTimer?.invalidate()
         statusItemMonitorTimer = nil
+        if let lockedOverlayContextMonitor {
+            NSEvent.removeMonitor(lockedOverlayContextMonitor)
+            self.lockedOverlayContextMonitor = nil
+        }
         DistributedNotificationCenter.default().removeObserver(
             self,
             name: AppInstanceLock.relaunchNotification,
             object: nil
         )
+        DistributedNotificationCenter.default().removeObserver(
+            self,
+            name: HelperBridge.commandNotification,
+            object: nil
+        )
+        DistributedNotificationCenter.default().post(
+            name: HelperBridge.quitHelperNotification,
+            object: nil,
+            userInfo: nil
+        )
     }
 
     private func configureStatusItem() {
-        let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+        let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         statusItem.isVisible = true
         if let button = statusItem.button {
-            if
-                let resourceURL = Bundle.main.resourceURL?.appendingPathComponent("menubar-apple-music.png"),
-                let icon = NSImage(contentsOf: resourceURL)
-            {
-                icon.isTemplate = true
-                icon.size = NSSize(width: 15, height: 15)
-                button.image = icon
-                button.imageScaling = .scaleProportionallyDown
-                button.imagePosition = .imageOnly
-                button.title = ""
-                button.attributedTitle = NSAttributedString(string: "")
-            } else {
-                button.image = nil
-                button.title = ""
-                button.attributedTitle = NSAttributedString(
-                    string: "♪",
-                    attributes: [
-                        .font: NSFont.systemFont(ofSize: 14, weight: .semibold),
-                        .foregroundColor: NSColor.white,
-                    ]
-                )
-                button.font = NSFont.systemFont(ofSize: 14, weight: .semibold)
-            }
+            applyStatusItemAppearance(to: button)
             button.toolTip = "Apple Music Desktop Lyrics"
         }
 
@@ -4007,13 +4116,18 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelega
         syncColorMenuState()
     }
 
+    private func applyStatusItemAppearance(to button: NSStatusBarButton) {
+        button.title = "歌词"
+        button.font = NSFont.systemFont(ofSize: 13, weight: .bold)
+    }
+
     private func ensureStatusItemVisible() {
-        if statusItem == nil || statusItem?.button == nil || statusItem?.menu == nil {
-            if let existingStatusItem = statusItem {
-                NSStatusBar.system.removeStatusItem(existingStatusItem)
-            }
-            statusItem = nil
-            configureStatusItem()
+        if
+            statusItem == nil ||
+            statusItem?.button == nil ||
+            statusMenu == nil
+        {
+            rebuildStatusItem()
             return
         }
 
@@ -4021,17 +4135,25 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelega
 
         if let button = statusItem?.button {
             button.isHidden = false
-            if button.image == nil,
-               let resourceURL = Bundle.main.resourceURL?.appendingPathComponent("menubar-apple-music.png"),
-               let icon = NSImage(contentsOf: resourceURL)
-            {
-                icon.isTemplate = true
-                icon.size = NSSize(width: 15, height: 15)
-                button.image = icon
-                button.imageScaling = .scaleProportionallyDown
-                button.imagePosition = .imageOnly
-                button.title = ""
-                button.attributedTitle = NSAttributedString(string: "")
+            applyStatusItemAppearance(to: button)
+        }
+    }
+
+    private func rebuildStatusItem() {
+        if let existingStatusItem = statusItem {
+            NSStatusBar.system.removeStatusItem(existingStatusItem)
+        }
+
+        statusItem = nil
+        statusMenu = nil
+        configureStatusItem()
+    }
+
+    private func scheduleStatusItemBootstrap() {
+        let retryDelays: [TimeInterval] = [0.2, 0.8, 1.8]
+        for delay in retryDelays {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                self?.ensureStatusItemVisible()
             }
         }
     }
@@ -4048,20 +4170,148 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelega
         statusItemMonitorTimer = timer
     }
 
-    private func applyLaunchAtLoginPreference(enabled: Bool) {
-        guard #available(macOS 13.0, *) else {
+    private func launchMenuBarHelper() {
+        let helperURL = Bundle.main.bundleURL
+            .appendingPathComponent("Contents/Helpers/Apple Music Lyrics Menu.app", isDirectory: true)
+        guard FileManager.default.fileExists(atPath: helperURL.path) else {
             return
         }
 
-        let service = SMAppService.mainApp
+        let configuration = NSWorkspace.OpenConfiguration()
+        configuration.activates = false
+        NSWorkspace.shared.openApplication(at: helperURL, configuration: configuration) { _, _ in }
+    }
 
+    private func postHelperSnapshot() {
+        let userInfo: [String: Any] = [
+            HelperBridge.trackTitleKey: model.currentTrackTitle,
+            HelperBridge.trackArtistKey: model.currentTrackArtist,
+            HelperBridge.translationEnabledKey: settings.isTranslationEnabled,
+            HelperBridge.positionLockedKey: settings.isPositionLocked,
+        ]
+
+        DistributedNotificationCenter.default().post(
+            name: HelperBridge.snapshotNotification,
+            object: nil,
+            userInfo: userInfo
+        )
+    }
+
+    @objc
+    private func handleHelperCommand(_ notification: Notification) {
+        guard
+            let rawCommand = notification.userInfo?[HelperBridge.commandKey] as? String,
+            let command = HelperBridge.Command(rawValue: rawCommand)
+        else {
+            return
+        }
+
+        switch command {
+        case .requestSnapshot:
+            postHelperSnapshot()
+        case .showOverlay:
+            bringOverlayToFront()
+        case .togglePositionLock:
+            togglePositionLock()
+            postHelperSnapshot()
+        case .toggleTranslation:
+            toggleTranslationEnabled()
+            postHelperSnapshot()
+        case .openTranslationSettings:
+            openTranslationSettings()
+        case .quitMainApp:
+            quitOverlay()
+        }
+    }
+
+    private func configureLockedOverlayContextMonitor() {
+        guard lockedOverlayContextMonitor == nil else {
+            return
+        }
+
+        lockedOverlayContextMonitor = NSEvent.addGlobalMonitorForEvents(
+            matching: [.rightMouseDown, .leftMouseDown]
+        ) { [weak self] event in
+            guard let self else { return }
+            guard self.settings.isPositionLocked else { return }
+
+            let isContextClick = event.type == .rightMouseDown ||
+                (event.type == .leftMouseDown && event.modifierFlags.contains(.control))
+            guard isContextClick else {
+                return
+            }
+
+            guard self.isPointInsideLockedOverlay(event.locationInWindow) else {
+                return
+            }
+
+            DispatchQueue.main.async {
+                self.presentLockedOverlayContextMenu(at: event.locationInWindow)
+            }
+        }
+    }
+
+    private func isPointInsideLockedOverlay(_ screenPoint: NSPoint) -> Bool {
+        guard
+            settings.isPositionLocked,
+            let window
+        else {
+            return false
+        }
+
+        return window.frame.insetBy(dx: -4, dy: -4).contains(screenPoint)
+    }
+
+    private func presentLockedOverlayContextMenu(at screenPoint: NSPoint) {
+        guard
+            settings.isPositionLocked,
+            let hostingView,
+            let window
+        else {
+            return
+        }
+
+        ensureStatusItemVisible()
+        guard let menu = statusMenu else {
+            return
+        }
+
+        NSApp.activate(ignoringOtherApps: true)
+        let windowPoint = window.convertPoint(fromScreen: screenPoint)
+        let viewPoint = hostingView.convert(windowPoint, from: nil)
+        menu.popUp(positioning: nil, at: viewPoint, in: hostingView)
+    }
+
+    @objc
+    private func toggleStatusMenu(_ sender: Any?) {
+        ensureStatusItemVisible()
+        guard let menu = statusMenu else {
+            return
+        }
+
+        statusItem?.popUpMenu(menu)
+    }
+
+    private func applyLaunchAtLoginPreference(enabled: Bool) {
         do {
             if enabled {
-                if service.status == .notRegistered {
-                    try service.register()
+                try LaunchAgentHelper.installCurrentApp()
+
+                if #available(macOS 13.0, *) {
+                    let service = SMAppService.mainApp
+                    if service.status == .notRegistered {
+                        try? service.register()
+                    }
                 }
-            } else if service.status == .enabled || service.status == .requiresApproval {
-                try service.unregister()
+            } else {
+                LaunchAgentHelper.uninstall()
+
+                if #available(macOS 13.0, *) {
+                    let service = SMAppService.mainApp
+                    if service.status == .enabled || service.status == .requiresApproval {
+                        try? service.unregister()
+                    }
+                }
             }
         } catch {
             print("[overlay] launch-at-login-error", error.localizedDescription)
@@ -4103,6 +4353,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelega
             .sink { [weak self] _ in
                 self?.syncTrackInfo()
                 self?.syncFavoriteMenuState()
+                self?.postHelperSnapshot()
             }
             .store(in: &cancellables)
 
@@ -4111,6 +4362,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelega
             .sink { [weak self] _ in
                 self?.syncTrackInfo()
                 self?.syncFavoriteMenuState()
+                self?.postHelperSnapshot()
             }
             .store(in: &cancellables)
 
@@ -4171,6 +4423,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelega
                 self?.model.setTranslationEnabled(isEnabled)
                 self?.syncTranslationMenuState()
                 self?.resizeWindowToFitContent(animated: true)
+                self?.postHelperSnapshot()
             }
             .store(in: &cancellables)
 
@@ -4208,6 +4461,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelega
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in
                 self?.syncPositionLockState()
+                self?.postHelperSnapshot()
             }
             .store(in: &cancellables)
     }
@@ -4260,11 +4514,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelega
     }
 
     private func syncLaunchAtLoginMenuState() {
-        if #available(macOS 13.0, *) {
-            launchAtLoginMenuItem?.state = SMAppService.mainApp.status == .enabled ? .on : .off
-        } else {
-            launchAtLoginMenuItem?.state = settings.launchAtLoginEnabled ? .on : .off
-        }
+        launchAtLoginMenuItem?.state = LaunchAgentHelper.isInstalled() ? .on : .off
     }
 
     private func syncTranslationMenuState() {

@@ -9,6 +9,7 @@ let package = Package(
     ],
     targets: [
         .executableTarget(name: "apple-lyrics-overlay"),
+        .executableTarget(name: "lyrics-menubar-helper"),
     ],
     swiftLanguageModes: [.v6]
 )
