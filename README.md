@@ -37,6 +37,12 @@
 | --- | --- |
 | ![Apple Music Lyrics Overlay screenshot 1](docs/overlay-shot-1.png) | ![Apple Music Lyrics Overlay screenshot 2](docs/overlay-shot-2.png) |
 
+### 菜单栏入口
+
+极简音符图标会常驻在菜单栏，点开即可操作歌词窗口、翻译和其他常用开关。
+
+![Apple Music Lyrics menu bar icon](docs/menubar-note.png)
+
 ## 这是什么
 
 - 菜单栏常驻的 Apple Music 桌面歌词应用
