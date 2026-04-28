@@ -1313,7 +1313,7 @@ private actor TencentTranslationClient {
 }
 
 private enum OverlayStyle {
-    static let cornerRadius: CGFloat = 24
+    static let cornerRadius: CGFloat = 18
     static let activeBackgroundOpacity = 0.0
     static let inactiveBackgroundOpacity = 0.0
     static let borderOpacity = 0.0
@@ -1329,8 +1329,8 @@ private enum OverlayStyle {
     static let outerPadding: CGFloat = 0
     static let windowBottomInset: CGFloat = 72
     static let glassFillOpacity: CGFloat = 0.085
-    static let glassStrokeOpacity: CGFloat = 0.15
-    static let ambientAuraOpacity: CGFloat = 0.04
+    static let glassStrokeOpacity: CGFloat = 0.13
+    static let ambientAuraOpacity: CGFloat = 0.025
     static let inactiveOverlayOpacity: CGFloat = 0.62
     static let lyricWidthAnimationDuration: TimeInterval = 0.2
 }
@@ -3208,23 +3208,23 @@ private struct OverlayRootView: View {
             : Color.white.opacity(model.isActive ? 0.10 : 0.06)
         let glassStrokeTopColor = colorScheme == .dark
             ? Color.white.opacity(model.isActive ? OverlayStyle.glassStrokeOpacity : OverlayStyle.glassStrokeOpacity * 0.5)
-            : Color.white.opacity(model.isActive ? 0.45 : 0.25)
-        let glassStrokeBottomColor = colorScheme == .dark ? Color.white.opacity(0.03) : Color.black.opacity(0.06)
-        let cardShadowColor = colorScheme == .dark ? Color.black.opacity(0.10) : Color.black.opacity(0.14)
+            : Color.white.opacity(model.isActive ? 0.32 : 0.18)
+        let glassStrokeBottomColor = colorScheme == .dark ? Color.white.opacity(0.03) : Color.black.opacity(0.04)
         let showsLyricBarBackground = settings.showsLyricBarBackground
         let lyricAnimationMode = settings.lyricAnimationMode
-        let showsSharedLyricAura = !showsLyricBarBackground && !displayedBottomLine.isEmpty
         let lyricPairSpacing = displayedBottomLine.isEmpty ? metrics.lineSpacing : metrics.lineSpacing + 2.4
         let secondaryFontSize = displayedBottomLine.isEmpty ? metrics.bottomFontSize : metrics.bottomFontSize * 0.93
         let secondaryMinHeight = secondaryFontSize * 1.06
 
         ZStack {
-            RoundedRectangle(cornerRadius: metrics.cornerRadius, style: .continuous)
-                .fill(Color.black.opacity(model.isActive ? OverlayStyle.activeBackgroundOpacity : OverlayStyle.inactiveBackgroundOpacity))
-                .overlay(
-                    RoundedRectangle(cornerRadius: metrics.cornerRadius, style: .continuous)
-                        .stroke(Color.white.opacity(OverlayStyle.borderOpacity), lineWidth: 1)
-                )
+            if !showsLyricBarBackground {
+                RoundedRectangle(cornerRadius: metrics.cornerRadius, style: .continuous)
+                    .fill(Color.black.opacity(model.isActive ? OverlayStyle.activeBackgroundOpacity : OverlayStyle.inactiveBackgroundOpacity))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: metrics.cornerRadius, style: .continuous)
+                            .stroke(Color.white.opacity(OverlayStyle.borderOpacity), lineWidth: 1)
+                    )
+            }
 
             VStack(spacing: lyricPairSpacing) {
                 AnimatedLyricContent(
@@ -3263,10 +3263,10 @@ private struct OverlayRootView: View {
             .background {
                 if showsLyricBarBackground {
                     ZStack {
-                        Capsule(style: .continuous)
+                        RoundedRectangle(cornerRadius: metrics.cornerRadius, style: .continuous)
                             .fill(.ultraThinMaterial)
 
-                        Capsule(style: .continuous)
+                        RoundedRectangle(cornerRadius: metrics.cornerRadius, style: .continuous)
                             .fill(
                                 LinearGradient(
                                     colors: [
@@ -3278,7 +3278,7 @@ private struct OverlayRootView: View {
                                 )
                             )
 
-                        Capsule(style: .continuous)
+                        RoundedRectangle(cornerRadius: metrics.cornerRadius, style: .continuous)
                             .stroke(
                                 LinearGradient(
                                     colors: [
@@ -3291,23 +3291,13 @@ private struct OverlayRootView: View {
                                 lineWidth: 1
                             )
 
-                        Capsule(style: .continuous)
+                        RoundedRectangle(cornerRadius: metrics.cornerRadius, style: .continuous)
                             .fill(settings.primaryGlowColor.opacity(model.isActive ? OverlayStyle.ambientAuraOpacity : OverlayStyle.ambientAuraOpacity * 0.45))
-                            .blur(radius: 12)
-                            .padding(.horizontal, -6)
-                            .padding(.vertical, -2)
+                            .blur(radius: 8)
+                            .padding(.horizontal, -2)
+                            .padding(.vertical, -1)
                     }
-                    .shadow(color: cardShadowColor, radius: 14, x: 0, y: 6)
                     .allowsHitTesting(false)
-                } else if showsSharedLyricAura {
-                    // Keep the pair readable with one shared, soft aura so the effect
-                    // stays airy instead of looking like two separate labels.
-                    Capsule(style: .continuous)
-                        .fill(Color.black.opacity(colorScheme == .dark ? 0.12 : 0.08))
-                        .blur(radius: colorScheme == .dark ? 16 : 14)
-                        .scaleEffect(x: 0.72, y: 0.64, anchor: .center)
-                        .offset(y: metrics.bottomFontSize * 0.46)
-                        .allowsHitTesting(false)
                 }
             }
         }
