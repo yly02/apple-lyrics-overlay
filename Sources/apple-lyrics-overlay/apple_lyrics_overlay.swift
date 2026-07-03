@@ -2485,17 +2485,123 @@ private actor LyricsClient {
         localPlainLyrics: [String]?,
         candidatePlainLyrics: [String]
     ) -> Double {
+        guard isViableLRCLibCandidate(result, query: query, snapshot: snapshot) else {
+            return -.infinity
+        }
+
+        let titleSimilarity = metadataSimilarity(candidate: result.trackName ?? result.name, expected: query.title)
+        let artistSimilarity = metadataSimilarity(candidate: result.artistName, expected: query.artist)
+        let albumSimilarity = metadataSimilarity(candidate: result.albumName, expected: query.album)
+
         var score = 0.0
         score += weightedMetadataScore(candidate: result.trackName ?? result.name, expected: query.title, exact: 5.0, partial: 3.2)
         score += weightedMetadataScore(candidate: result.artistName, expected: query.artist, exact: 4.0, partial: 2.5)
         score += weightedMetadataScore(candidate: result.albumName, expected: query.album, exact: 1.4, partial: 0.8)
         score += durationScore(candidateDuration: result.duration, expectedDuration: snapshot.duration)
+        score += exactMetadataBoost(titleSimilarity: titleSimilarity, artistSimilarity: artistSimilarity, albumSimilarity: albumSimilarity)
+        score += mismatchPenalty(
+            titleSimilarity: titleSimilarity,
+            artistSimilarity: artistSimilarity,
+            albumSimilarity: albumSimilarity,
+            hasLocalLyrics: localPlainLyrics != nil
+        )
 
         if let localPlainLyrics {
             score += lyricAlignmentScore(candidatePlainLyrics: candidatePlainLyrics, localPlainLyrics: localPlainLyrics) * 6.5
         }
 
         return score
+    }
+
+    private func isViableLRCLibCandidate(
+        _ result: LRCLibResult,
+        query: LyricLookupQuery,
+        snapshot: MusicSnapshot
+    ) -> Bool {
+        let titleSimilarity = metadataSimilarity(candidate: result.trackName ?? result.name, expected: query.title)
+        let artistSimilarity = metadataSimilarity(candidate: result.artistName, expected: query.artist)
+        let durationDelta = durationDelta(candidateDuration: result.duration, expectedDuration: snapshot.duration)
+
+        if titleSimilarity < 0.45 || artistSimilarity < 0.34 {
+            return false
+        }
+
+        if titleSimilarity < 0.6 && artistSimilarity < 0.55 {
+            return false
+        }
+
+        if titleSimilarity < 0.72 && durationDelta > 20 {
+            return false
+        }
+
+        return true
+    }
+
+    private func metadataSimilarity(candidate: String?, expected: String) -> Double {
+        let expectedNormalized = normalizedLyricComparisonText(expected)
+        let candidateNormalized = normalizedLyricComparisonText(candidate ?? "")
+
+        guard !expectedNormalized.isEmpty, !candidateNormalized.isEmpty else {
+            return 0
+        }
+
+        let expectedCompact = expectedNormalized.replacingOccurrences(of: " ", with: "")
+        let candidateCompact = candidateNormalized.replacingOccurrences(of: " ", with: "")
+
+        if expectedCompact == candidateCompact {
+            return 1
+        }
+
+        if expectedCompact.contains(candidateCompact) || candidateCompact.contains(expectedCompact) {
+            let shorter = min(expectedCompact.count, candidateCompact.count)
+            let longer = max(expectedCompact.count, candidateCompact.count)
+            return Double(shorter) / Double(longer)
+        }
+
+        return lyricLineSimilarity(expectedNormalized, candidateNormalized)
+    }
+
+    private func exactMetadataBoost(
+        titleSimilarity: Double,
+        artistSimilarity: Double,
+        albumSimilarity: Double
+    ) -> Double {
+        var boost = 0.0
+
+        if titleSimilarity >= 0.999 && artistSimilarity >= 0.999 {
+            boost += 1.6
+        } else if titleSimilarity >= 0.92 && artistSimilarity >= 0.92 {
+            boost += 0.9
+        }
+
+        if albumSimilarity >= 0.999 {
+            boost += 0.45
+        }
+
+        return boost
+    }
+
+    private func mismatchPenalty(
+        titleSimilarity: Double,
+        artistSimilarity: Double,
+        albumSimilarity: Double,
+        hasLocalLyrics: Bool
+    ) -> Double {
+        var penalty = 0.0
+
+        if titleSimilarity < 0.72 {
+            penalty -= (0.72 - titleSimilarity) * 7.5
+        }
+
+        if artistSimilarity < 0.68 {
+            penalty -= (0.68 - artistSimilarity) * 6.2
+        }
+
+        if !hasLocalLyrics && albumSimilarity > 0 && albumSimilarity < 0.45 {
+            penalty -= (0.45 - albumSimilarity) * 1.8
+        }
+
+        return penalty
     }
 
     private func weightedMetadataScore(
@@ -2553,6 +2659,18 @@ private actor LyricsClient {
         default:
             return -2.5
         }
+    }
+
+    private func durationDelta(candidateDuration: TimeInterval?, expectedDuration: TimeInterval) -> TimeInterval {
+        guard
+            let candidateDuration,
+            candidateDuration > 0,
+            expectedDuration > 0
+        else {
+            return 0
+        }
+
+        return abs(candidateDuration - expectedDuration)
     }
 
     private func lyricAlignmentScore(candidatePlainLyrics: [String], localPlainLyrics: [String]) -> Double {
