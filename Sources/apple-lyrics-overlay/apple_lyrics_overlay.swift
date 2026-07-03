@@ -1000,11 +1000,47 @@ private enum LaunchAgentHelper {
             withIntermediateDirectories: true
         )
 
+        let watcherScript = """
+        appPath="$1"
+        bundleID="$2"
+        opened=0
+
+        quit_overlay() {
+          /usr/bin/osascript -e "tell application id \\"$bundleID\\" to quit" >/dev/null 2>&1
+          /bin/sleep 1
+          /usr/bin/pkill -x "AppleMusicLyrics" >/dev/null 2>&1 || true
+          /usr/bin/pkill -x "AppleMusicLyricsMenu" >/dev/null 2>&1 || true
+        }
+
+        while true; do
+          if /usr/bin/pgrep -x "Music" >/dev/null 2>&1; then
+            if [ "$opened" -eq 0 ]; then
+              /usr/bin/open "$appPath"
+              opened=1
+            fi
+          else
+            if [ "$opened" -eq 1 ]; then
+              quit_overlay
+            fi
+            opened=0
+          fi
+
+          /bin/sleep 3
+        done
+        """
+
         let plist: [String: Any] = [
             "Label": label,
-            "ProgramArguments": ["/usr/bin/open", bundlePath],
+            "ProgramArguments": [
+                "/bin/zsh",
+                "-c",
+                watcherScript,
+                "apple-music-lyrics-watcher",
+                bundlePath,
+                Bundle.main.bundleIdentifier ?? "com.yly02.applemusiclyricsoverlay",
+            ],
             "RunAtLoad": true,
-            "KeepAlive": false,
+            "KeepAlive": true,
             "LimitLoadToSessionType": ["Aqua"],
             "ProcessType": "Interactive",
         ]
