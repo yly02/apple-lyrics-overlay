@@ -4733,6 +4733,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelega
                 self.appliedContentWidth = width
                 let newFrame = self.frame(for: metrics, contentWidth: width, preserving: window)
                 window.setFrame(newFrame, display: true, animate: shouldAnimate)
+                self.persistWindowPosition()
             }
 
             if immediate || !animated || self.appliedContentWidth == nil {
@@ -4962,6 +4963,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelega
 
     @objc
     private func quitOverlay() {
+        persistWindowPosition()
         NSApp.terminate(nil)
     }
 }
