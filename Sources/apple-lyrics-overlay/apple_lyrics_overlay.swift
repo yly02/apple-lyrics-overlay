@@ -2086,6 +2086,7 @@ private final class OverlaySettings: ObservableObject {
         }
 
         UserDefaults.standard.set(data, forKey: Self.windowPositionKey)
+        UserDefaults.standard.synchronize()
     }
 
     func savedWindowPosition() -> StoredWindowPosition? {
@@ -4380,11 +4381,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelega
         if let screenIdentifier = position.screenIdentifier,
            let screen = screen(matching: screenIdentifier)
         {
-            let visibleFrame = screen.visibleFrame
-            let centerX = visibleFrame.minX + (visibleFrame.width * CGFloat(position.relativeCenterX))
-            let minY = visibleFrame.minY + (visibleFrame.height * CGFloat(position.relativeMinY))
-            let frame = NSRect(x: centerX - (width / 2), y: minY, width: width, height: height)
-            return clampedFrame(frame, inside: visibleFrame)
+            return relativeFrame(from: position, in: screen.visibleFrame, width: width, height: height)
         }
 
         if position.screenIdentifier == nil {
@@ -4400,7 +4397,23 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelega
             }
         }
 
-        return nil
+        guard let visibleFrame = NSScreen.main?.visibleFrame else {
+            return nil
+        }
+
+        return relativeFrame(from: position, in: visibleFrame, width: width, height: height)
+    }
+
+    private func relativeFrame(
+        from position: StoredWindowPosition,
+        in visibleFrame: NSRect,
+        width: CGFloat,
+        height: CGFloat
+    ) -> NSRect {
+        let centerX = visibleFrame.minX + (visibleFrame.width * CGFloat(position.relativeCenterX))
+        let minY = visibleFrame.minY + (visibleFrame.height * CGFloat(position.relativeMinY))
+        let frame = NSRect(x: centerX - (width / 2), y: minY, width: width, height: height)
+        return clampedFrame(frame, inside: visibleFrame)
     }
 
     private func screen(matching identifier: String) -> NSScreen? {
@@ -4506,6 +4519,11 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelega
         model.start()
         bindMenuState()
         resizeWindowToFitContent(animated: false, immediate: true)
+    }
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        persistWindowPosition()
+        return .terminateNow
     }
 
     func applicationWillTerminate(_ notification: Notification) {
