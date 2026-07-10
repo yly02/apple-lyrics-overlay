@@ -38,6 +38,18 @@ private struct LRCLibResult: Decodable {
     let syncedLyrics: String?
 }
 
+private struct LRCGCSearchCandidate: Hashable {
+    let url: URL
+    let title: String
+}
+
+private struct LRCGCLyricCandidate {
+    let url: URL
+    let title: String
+    let artist: String
+    let lines: [LyricLine]
+}
+
 private struct LyricsOVHResult: Decodable {
     let lyrics: String
 }
@@ -228,6 +240,7 @@ private struct LyricLookupQuery: Hashable {
 
 private enum LyricsProviderKind: String, CaseIterable {
     case lrclib = "LRCLIB"
+    case lrcgc = "歌词千寻"
     case musicLocal = "Music"
     case lyricsOvh = "lyrics.ovh"
 }
@@ -531,6 +544,51 @@ private func normalizedLyricComparisonText(_ text: String) -> String {
 
 private func compactLyricComparisonText(_ text: String) -> String {
     normalizedLyricComparisonText(text).replacingOccurrences(of: " ", with: "")
+}
+
+private func htmlDecodedText(_ text: String) -> String {
+    var decoded = text
+        .replacingOccurrences(of: "&nbsp;", with: " ")
+        .replacingOccurrences(of: "&amp;", with: "&")
+        .replacingOccurrences(of: "&lt;", with: "<")
+        .replacingOccurrences(of: "&gt;", with: ">")
+        .replacingOccurrences(of: "&quot;", with: "\"")
+        .replacingOccurrences(of: "&#039;", with: "'")
+        .replacingOccurrences(of: "&apos;", with: "'")
+
+    if let regex = try? NSRegularExpression(pattern: #"&#(x[0-9a-fA-F]+|\d+);"#) {
+        let matches = regex.matches(in: decoded, range: NSRange(decoded.startIndex..., in: decoded))
+        for match in matches.reversed() {
+            guard
+                let fullRange = Range(match.range(at: 0), in: decoded),
+                let valueRange = Range(match.range(at: 1), in: decoded)
+            else {
+                continue
+            }
+
+            let rawValue = String(decoded[valueRange])
+            let scalarValue: UInt32?
+            if rawValue.hasPrefix("x") || rawValue.hasPrefix("X") {
+                scalarValue = UInt32(rawValue.dropFirst(), radix: 16)
+            } else {
+                scalarValue = UInt32(rawValue)
+            }
+
+            guard
+                let scalarValue,
+                let scalar = UnicodeScalar(scalarValue)
+            else {
+                continue
+            }
+
+            decoded.replaceSubrange(fullRange, with: String(Character(scalar)))
+        }
+    }
+
+    return decoded
+        .replacingOccurrences(of: #"\r\n|\r"#, with: "\n", options: .regularExpression)
+        .replacingOccurrences(of: #"[ \t]{2,}"#, with: " ", options: .regularExpression)
+        .trimmingCharacters(in: .whitespacesAndNewlines)
 }
 
 private func lyricLineSimilarity(_ lhs: String, _ rhs: String) -> Double {
@@ -2219,6 +2277,7 @@ private actor LyricsClient {
     private var cache: [String: LyricFetchResult] = [:]
     private let persistentCache = LyricsPersistentCache.shared
     private let minimumLRCLibCandidateScore = 8.5
+    private let minimumLRCGCCandidateScore = 7.0
     private let minimumCorrectedCoverage = 0.22
 
     func lyrics(for snapshot: MusicSnapshot, localLyrics: String?) async throws -> LyricsPayload {
@@ -2252,6 +2311,10 @@ private actor LyricsClient {
             switch provider {
             case .lrclib:
                 if let lines = try await fetchLRCLibLyrics(for: query, snapshot: snapshot, localPlainLyrics: localPlainLyrics) {
+                    return LyricFetchResult(provider: provider, payload: .synced(lines))
+                }
+            case .lrcgc:
+                if let lines = try await fetchLRCGCLyrics(for: query, snapshot: snapshot, localPlainLyrics: localPlainLyrics) {
                     return LyricFetchResult(provider: provider, payload: .synced(lines))
                 }
             case .musicLocal:
@@ -2321,6 +2384,48 @@ private actor LyricsClient {
             )
 
             let correction = correctedSyncedLyrics(parsedLines, using: localPlainLyrics)
+            let chosenLines = correction.lines
+            let coverage = correction.coverage
+
+            if score > bestScore || (abs(score - bestScore) < 0.001 && coverage > bestCoverage) {
+                bestScore = score
+                bestCoverage = coverage
+                bestLines = chosenLines
+            }
+        }
+
+        return bestLines
+    }
+
+    private func fetchLRCGCLyrics(
+        for query: LyricLookupQuery,
+        snapshot: MusicSnapshot,
+        localPlainLyrics: [String]?
+    ) async throws -> [LyricLine]? {
+        let searchCandidates = try await fetchLRCGCSearchCandidates(for: query)
+        guard !searchCandidates.isEmpty else {
+            return nil
+        }
+
+        var bestLines: [LyricLine]?
+        var bestScore = minimumLRCGCCandidateScore
+        var bestCoverage = 0.0
+
+        for searchCandidate in searchCandidates.prefix(5) {
+            guard let candidate = try await fetchLRCGCLyricCandidate(from: searchCandidate.url) else {
+                continue
+            }
+
+            let candidatePlainLyrics = candidate.lines.map(\.text)
+            let score = scoreLRCGCCandidate(
+                candidate,
+                query: query,
+                snapshot: snapshot,
+                localPlainLyrics: localPlainLyrics,
+                candidatePlainLyrics: candidatePlainLyrics
+            )
+
+            let correction = correctedSyncedLyrics(candidate.lines, using: localPlainLyrics)
             let chosenLines = correction.lines
             let coverage = correction.coverage
 
@@ -2411,6 +2516,161 @@ private actor LyricsClient {
         } catch {
             return []
         }
+    }
+
+    private func fetchLRCGCSearchCandidates(for query: LyricLookupQuery) async throws -> [LRCGCSearchCandidate] {
+        guard !query.title.isEmpty else {
+            return []
+        }
+
+        var components = URLComponents(string: "https://lrcgc.com/so/")
+        let searchText = [query.title, query.artist]
+            .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+            .joined(separator: " ")
+        components?.queryItems = [
+            URLQueryItem(name: "q", value: searchText),
+        ]
+
+        guard let url = components?.url else {
+            return []
+        }
+
+        do {
+            let html = try await fetchLRCGCHTML(from: url)
+            return parseLRCGCSearchCandidates(from: html)
+        } catch {
+            return []
+        }
+    }
+
+    private func fetchLRCGCLyricCandidate(from url: URL) async throws -> LRCGCLyricCandidate? {
+        do {
+            let html = try await fetchLRCGCHTML(from: url)
+            guard let lyricHTML = firstRegexCapture(
+                pattern: #"<p\s+id=\"J_lyric\"[^>]*>(.*?)</p>"#,
+                in: html,
+                options: [.dotMatchesLineSeparators, .caseInsensitive]
+            ) else {
+                return nil
+            }
+
+            let titleMetadata = parseLRCGCTitleMetadata(from: html)
+            let rawLRC = htmlDecodedText(
+                lyricHTML
+                    .replacingOccurrences(of: #"<br\s*/?>"#, with: "\n", options: [.regularExpression, .caseInsensitive])
+                    .replacingOccurrences(of: #"<[^>]+>"#, with: "", options: .regularExpression)
+            )
+            let lines = parseLRC(rawLRC)
+            guard lines.count >= 4 else {
+                return nil
+            }
+
+            return LRCGCLyricCandidate(
+                url: url,
+                title: titleMetadata.title,
+                artist: titleMetadata.artist,
+                lines: lines
+            )
+        } catch {
+            return nil
+        }
+    }
+
+    private func fetchLRCGCHTML(from url: URL) async throws -> String {
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 6
+        request.setValue("AppleMusicLyrics/1.0 (+https://github.com/yly02/apple-lyrics-overlay)", forHTTPHeaderField: "User-Agent")
+        request.setValue("text/html,application/xhtml+xml", forHTTPHeaderField: "Accept")
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard
+            let http = response as? HTTPURLResponse,
+            http.statusCode == 200
+        else {
+            throw AppError.emptyResponse
+        }
+
+        return String(data: data, encoding: .utf8) ?? String(decoding: data, as: UTF8.self)
+    }
+
+    private func parseLRCGCSearchCandidates(from html: String) -> [LRCGCSearchCandidate] {
+        let pattern = #"<a\s+href=\"(/[^\"]*lyric-\d+-\d+\.html)\"[^>]*>(.*?)</a>"#
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.dotMatchesLineSeparators, .caseInsensitive]) else {
+            return []
+        }
+
+        var candidates: [LRCGCSearchCandidate] = []
+        var seen: Set<URL> = []
+
+        for match in regex.matches(in: html, range: NSRange(html.startIndex..., in: html)) {
+            guard
+                let pathRange = Range(match.range(at: 1), in: html),
+                let titleRange = Range(match.range(at: 2), in: html),
+                let url = URL(string: "https://lrcgc.com\(html[pathRange])")
+            else {
+                continue
+            }
+
+            guard seen.insert(url).inserted else {
+                continue
+            }
+
+            let title = htmlDecodedText(
+                String(html[titleRange])
+                    .replacingOccurrences(of: #"<[^>]+>"#, with: "", options: .regularExpression)
+            )
+            candidates.append(LRCGCSearchCandidate(url: url, title: title))
+        }
+
+        return candidates
+    }
+
+    private func parseLRCGCTitleMetadata(from html: String) -> (artist: String, title: String) {
+        let metaTitle = firstRegexCapture(
+            pattern: #"<meta\s+class=\"swiftype\"\s+name=\"title\"[^>]*content=\"([^\"]+)\""#,
+            in: html,
+            options: [.caseInsensitive]
+        ).map(htmlDecodedText) ?? ""
+
+        if let separatorRange = metaTitle.range(of: " - ") {
+            let artist = String(metaTitle[..<separatorRange.lowerBound])
+            let title = String(metaTitle[separatorRange.upperBound...])
+            return (artist.trimmingCharacters(in: .whitespacesAndNewlines), title.trimmingCharacters(in: .whitespacesAndNewlines))
+        }
+
+        let pageTitle = firstRegexCapture(
+            pattern: #"<small\s+class=\"f16\">歌词</small>(.*?)</h1>"#,
+            in: html,
+            options: [.dotMatchesLineSeparators, .caseInsensitive]
+        ).map { htmlDecodedText($0.replacingOccurrences(of: #"<[^>]+>"#, with: "", options: .regularExpression)) } ?? ""
+
+        let artist = firstRegexCapture(
+            pattern: #"<a\s+href=\"songlist-\d+-1\.html\">(.*?)</a>"#,
+            in: html,
+            options: [.dotMatchesLineSeparators, .caseInsensitive]
+        ).map { htmlDecodedText($0.replacingOccurrences(of: #"<[^>]+>"#, with: "", options: .regularExpression)) } ?? ""
+
+        return (artist.trimmingCharacters(in: .whitespacesAndNewlines), pageTitle.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+
+    private func firstRegexCapture(
+        pattern: String,
+        in text: String,
+        options: NSRegularExpression.Options = []
+    ) -> String? {
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: options) else {
+            return nil
+        }
+
+        guard
+            let match = regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
+            match.numberOfRanges > 1,
+            let range = Range(match.range(at: 1), in: text)
+        else {
+            return nil
+        }
+
+        return String(text[range])
     }
 
     private func parseLRC(_ raw: String) -> [LyricLine] {
@@ -2568,6 +2828,44 @@ private actor LyricsClient {
 
         if let localPlainLyrics {
             score += lyricAlignmentScore(candidatePlainLyrics: candidatePlainLyrics, localPlainLyrics: localPlainLyrics) * 6.5
+        }
+
+        return score
+    }
+
+    private func scoreLRCGCCandidate(
+        _ result: LRCGCLyricCandidate,
+        query: LyricLookupQuery,
+        snapshot: MusicSnapshot,
+        localPlainLyrics: [String]?,
+        candidatePlainLyrics: [String]
+    ) -> Double {
+        let titleSimilarity = metadataSimilarity(candidate: result.title, expected: query.title)
+        let artistSimilarity = metadataSimilarity(candidate: result.artist, expected: query.artist)
+        let candidateDuration = result.lines.last?.timestamp
+
+        guard titleSimilarity >= 0.52, artistSimilarity >= 0.34 else {
+            return -.infinity
+        }
+
+        if titleSimilarity < 0.7 && artistSimilarity < 0.58 {
+            return -.infinity
+        }
+
+        var score = 0.0
+        score += weightedMetadataScore(candidate: result.title, expected: query.title, exact: 5.2, partial: 3.3)
+        score += weightedMetadataScore(candidate: result.artist, expected: query.artist, exact: 4.0, partial: 2.5)
+        score += durationScore(candidateDuration: candidateDuration, expectedDuration: snapshot.duration)
+        score += exactMetadataBoost(titleSimilarity: titleSimilarity, artistSimilarity: artistSimilarity, albumSimilarity: 0)
+        score += mismatchPenalty(
+            titleSimilarity: titleSimilarity,
+            artistSimilarity: artistSimilarity,
+            albumSimilarity: 0,
+            hasLocalLyrics: localPlainLyrics != nil
+        )
+
+        if let localPlainLyrics {
+            score += lyricAlignmentScore(candidatePlainLyrics: candidatePlainLyrics, localPlainLyrics: localPlainLyrics) * 6.0
         }
 
         return score
