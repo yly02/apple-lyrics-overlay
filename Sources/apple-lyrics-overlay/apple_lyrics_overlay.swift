@@ -562,6 +562,59 @@ private func lyricLineSimilarity(_ lhs: String, _ rhs: String) -> Double {
     return Double(overlap) / Double(max(leftTokens.count, rightTokens.count))
 }
 
+private func containsForeignScript(_ text: String) -> Bool {
+    text.range(
+        of: #"\p{Latin}|\p{Hangul}|[\p{Hiragana}\p{Katakana}]|\p{Cyrillic}|\p{Greek}|\p{Arabic}|\p{Hebrew}|\p{Thai}|\p{Devanagari}"#,
+        options: .regularExpression
+    ) != nil
+}
+
+private func containsMeaningfulForeignContent(_ text: String) -> Bool {
+    if text.range(
+        of: #"\p{Hangul}|[\p{Hiragana}\p{Katakana}]|\p{Cyrillic}|\p{Greek}|\p{Arabic}|\p{Hebrew}|\p{Thai}|\p{Devanagari}"#,
+        options: .regularExpression
+    ) != nil {
+        return true
+    }
+
+    let latinTokens = text
+        .folding(options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive], locale: .current)
+        .lowercased()
+        .replacingOccurrences(of: #"[^a-z']+"#, with: " ", options: .regularExpression)
+        .split(separator: " ")
+        .map(String.init)
+
+    guard !latinTokens.isEmpty else {
+        return false
+    }
+
+    return latinTokens.contains { lyricFillerTranslation(for: $0) == nil }
+}
+
+private func isUsefulTranslation(_ translatedText: String, for sourceText: String) -> Bool {
+    let source = normalizedTranslationText(sourceText)
+    let translated = normalizedTranslationText(translatedText)
+    guard !source.isEmpty, !translated.isEmpty else {
+        return false
+    }
+
+    if source.caseInsensitiveCompare(translated) == .orderedSame {
+        return false
+    }
+
+    let sourceCompact = compactLyricComparisonText(source)
+    let translatedCompact = compactLyricComparisonText(translated)
+    guard !sourceCompact.isEmpty, !translatedCompact.isEmpty else {
+        return false
+    }
+
+    if sourceCompact == translatedCompact {
+        return false
+    }
+
+    return lyricLineSimilarity(source, translated) < 0.92
+}
+
 @MainActor
 private final class TranslationSettingsPanelModel: ObservableObject {
     enum StatusTone {
@@ -761,12 +814,15 @@ private actor TranslationPersistentCache {
     }
 
     func translation(for text: String) -> String? {
-        guard let cached = cache[key(for: text)] else {
+        let cacheKey = key(for: text)
+        guard let cached = cache[cacheKey] else {
             return nil
         }
 
         let polished = polishedLyricTranslation(cached, sourceText: text)
-        if polished.isEmpty {
+        if polished.isEmpty || !isUsefulTranslation(polished, for: text) {
+            cache.removeValue(forKey: cacheKey)
+            persist()
             return nil
         }
 
@@ -775,7 +831,7 @@ private actor TranslationPersistentCache {
 
     func store(_ translatedText: String, for text: String) {
         let polished = polishedLyricTranslation(translatedText, sourceText: text)
-        guard !polished.isEmpty else {
+        guard !polished.isEmpty, isUsefulTranslation(polished, for: text) else {
             return
         }
 
@@ -836,6 +892,10 @@ private actor TranslationFallbackClient {
 
     private func normalizeToSimplifiedChineseIfNeeded(_ text: String) -> String? {
         guard text.range(of: #"\p{Han}"#, options: .regularExpression) != nil else {
+            return nil
+        }
+
+        guard !containsMeaningfulForeignContent(text) else {
             return nil
         }
 
@@ -2834,7 +2894,7 @@ private final class OverlayViewModel: ObservableObject {
         }
 
         let normalizedText = normalizedTranslationText(translatedText)
-        guard !normalizedText.isEmpty else {
+        guard !normalizedText.isEmpty, isUsefulTranslation(normalizedText, for: originalText) else {
             finishTranslationRequest(for: originalText)
             return
         }
@@ -3330,14 +3390,14 @@ private final class OverlayViewModel: ObservableObject {
             return false
         }
 
-        let containsForeignScript = trimmed.range(
-            of: #"\p{Latin}|\p{Hangul}|[\p{Hiragana}\p{Katakana}]|\p{Cyrillic}|\p{Greek}|\p{Arabic}|\p{Hebrew}|\p{Thai}|\p{Devanagari}"#,
-            options: .regularExpression
-        ) != nil
+        let containsChinese = trimmed.range(of: #"\p{Han}"#, options: .regularExpression) != nil
+        if containsChinese {
+            return containsMeaningfulForeignContent(trimmed)
+        }
 
         // Chinese lyrics should stay single-line. Only non-Chinese scripts
         // need a translated second line.
-        return containsForeignScript
+        return containsForeignScript(trimmed)
     }
 }
 
