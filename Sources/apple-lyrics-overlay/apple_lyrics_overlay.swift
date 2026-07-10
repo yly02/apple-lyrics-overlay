@@ -401,12 +401,106 @@ private func polishedLyricTranslation(_ translatedText: String, sourceText: Stri
         )
     }
 
+    polished = elegantLyricTranslation(polished, sourceText: sourceTrimmed)
+
     polished = polished
         .replacingOccurrences(of: #"([，、])\1+"#, with: "$1", options: .regularExpression)
         .replacingOccurrences(of: #"\s{2,}"#, with: " ", options: .regularExpression)
         .trimmingCharacters(in: .whitespacesAndNewlines)
 
     return normalizedTranslationText(polished)
+}
+
+private func elegantLyricTranslation(_ translatedText: String, sourceText: String) -> String {
+    let source = normalizedEnglishLyricSource(sourceText)
+    guard !source.isEmpty else {
+        return translatedText
+    }
+
+    var polished = translatedText
+
+    let sourceDrivenRewrites: [(String, String, String)] = [
+        (#"\byou know\b"#, #"你知道"#, "你明明知道"),
+        (#"\bfollow my lead\b"#, #"跟随我的(引导|带领)"#, "跟着我走"),
+        (#"\bdon't mind me\b"#, #"不要介意我"#, "别在意我"),
+        (#"\btalk too much\b"#, #"说太多"#, "多说"),
+        (#"\bhandmade for\b"#, #"手工制作"#, "量身而生"),
+        (#"\bbrand new\b"#, #"全新(的)?"#, "崭新"),
+        (#"\bshape of you\b"#, #"你的形状"#, "你的轮廓"),
+        (#"\bpush and pull\b"#, #"推和拉"#, "若即若离"),
+        (#"\bmagnet\b"#, #"磁铁"#, "磁石"),
+        (#"\bfalling\b"#, #"正在坠落"#, "也在沉沦"),
+        (#"\bfirst date\b"#, #"第一次约会"#, "初次约会"),
+        (#"\btaxi\b"#, #"出租车"#, "计程车"),
+        (#"\bbackseat\b"#, #"后座"#, "后排座"),
+        (#"\bradio\b"#, #"收音机"#, "电台"),
+    ]
+
+    for (sourcePattern, translationPattern, replacement) in sourceDrivenRewrites {
+        guard source.range(of: sourcePattern, options: .regularExpression) != nil else {
+            continue
+        }
+
+        polished = polished.replacingOccurrences(
+            of: translationPattern,
+            with: replacement,
+            options: .regularExpression
+        )
+    }
+
+    let generalRewrites: [(String, String)] = [
+        (#"我是爱上了"#, "我爱上了"),
+        (#"我正在爱上"#, "我爱上了"),
+        (#"我坠入爱河了"#, "我爱上了"),
+        (#"坠入了爱河"#, "爱上了"),
+        (#"每一天"#, "每天"),
+        (#"某个像我一样的人"#, "像我这样的人"),
+        (#"不要管我"#, "别管我"),
+        (#"来吧，现在"#, "来吧"),
+        (#"现在来吧"#, "来吧"),
+        (#"抓住我的腰"#, "搂住我的腰"),
+        (#"把那个身体放在我身上"#, "让身体贴近我"),
+        (#"你的床单"#, "床单"),
+        (#"闻起来像你"#, "留着你的气息"),
+        (#"发现一些崭新的东西"#, "发现崭新的事物"),
+        (#"发现某些崭新的东西"#, "发现崭新的事物"),
+        (#"家人过得还好"#, "家人都还安好"),
+        (#"甜的和酸的"#, "甜与酸"),
+        (#"把收音机播放"#, "让电台响起"),
+        (#"夜总会"#, "夜店"),
+        (#"爱人"#, "恋人"),
+        (#"机会现在"#, "机会"),
+        (#"给它一个机会"#, "试一试"),
+        (#"开始一段对话"#, "攀谈起来"),
+        (#"开始聊天"#, "攀谈起来"),
+        (#"我可能很疯狂"#, "我也许有点疯狂"),
+        (#"别介意我"#, "别在意我"),
+        (#"太多话"#, "太多"),
+        (#"约会对象"#, "约会"),
+        (#"我的心也在坠落"#, "我的心也在沉沦"),
+        (#"崭新的东西"#, "崭新的事物"),
+        (#"酸甜苦辣"#, "甜与酸"),
+        (#"电台播放"#, "电台响起"),
+    ]
+
+    for (pattern, replacement) in generalRewrites {
+        polished = polished.replacingOccurrences(
+            of: pattern,
+            with: replacement,
+            options: .regularExpression
+        )
+    }
+
+    return polished
+}
+
+private func normalizedEnglishLyricSource(_ text: String) -> String {
+    text
+        .folding(options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive], locale: .current)
+        .lowercased()
+        .replacingOccurrences(of: #"[^a-z0-9'\s]+"#, with: " ", options: .regularExpression)
+        .replacingOccurrences(of: #"\s{2,}"#, with: " ", options: .regularExpression)
+        .trimmingCharacters(in: .whitespacesAndNewlines)
 }
 
 private func lyricIdiomTranslation(for sourceText: String) -> String? {
