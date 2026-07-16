@@ -242,6 +242,7 @@ private enum LyricsProviderKind: String, CaseIterable {
     case lrclib = "LRCLIB"
     case lrcgc = "歌词千寻"
     case musicLocal = "Music"
+    case embedded = "内置歌词库"
     case lyricsOvh = "lyrics.ovh"
 }
 
@@ -259,6 +260,76 @@ private struct LyricFetchResult {
 private struct PersistentLyricsCacheEntry: Codable {
     let providerRawValue: String
     let plainLines: [String]
+}
+
+private struct EmbeddedPlainLyricsEntry {
+    let title: String
+    let artists: [String]
+    let plainLines: [String]
+}
+
+private enum EmbeddedLyricsLibrary {
+    private static let entries: [EmbeddedPlainLyricsEntry] = [
+        EmbeddedPlainLyricsEntry(
+            title: "忽然之间",
+            artists: ["莫文蔚", "Karen Mok"],
+            plainLines: [
+                "忽然之间 天昏地暗",
+                "世界可以忽然什么都没有",
+                "我想起了你 再想到自己",
+                "我为什么总在非常脆弱的时候",
+                "怀念你",
+                "我明白",
+                "太放不开你的爱",
+                "太熟悉你的关怀",
+                "分不开",
+                "想你算是安慰还是悲哀",
+                "而现在 就算时针都停摆",
+                "就算生命像尘埃 分不开",
+                "我们也许反而更相信爱",
+                "如果这天地 最终会消失",
+                "不想一路走来珍惜的回忆",
+                "没有你",
+                "我明白",
+                "太放不开你的爱",
+                "太熟悉你的关怀",
+                "分不开",
+                "想你算是安慰还是悲哀",
+                "而现在 就算时针都停摆",
+                "就算生命像尘埃 分不开",
+                "我们也许反而更相信爱",
+                "我明白",
+                "太放不开你的爱",
+                "太熟悉你的关怀",
+                "分不开",
+                "想你算是安慰还是悲哀",
+                "而现在 就算时针都停摆",
+                "就算生命像尘埃 分不开",
+                "我们也许反而更相信爱",
+            ]
+        ),
+    ]
+
+    static func plainLyrics(for query: LyricLookupQuery) -> [String]? {
+        entries.first { entry in
+            metadataMatches(entry.title, query.title)
+                && entry.artists.contains { metadataMatches($0, query.artist) }
+        }?.plainLines
+    }
+
+    private static func metadataMatches(_ lhs: String, _ rhs: String) -> Bool {
+        let left = metadataKey(lhs)
+        let right = metadataKey(rhs)
+        guard !left.isEmpty, !right.isEmpty else {
+            return false
+        }
+
+        return left == right || left.contains(right) || right.contains(left)
+    }
+
+    private static func metadataKey(_ value: String) -> String {
+        compactLyricComparisonText(simplifiedChineseDisplayText(value))
+    }
 }
 
 private struct TranslationRequest: Equatable {
@@ -2463,6 +2534,11 @@ private actor LyricsClient {
 
                 if let cachedLyrics = await persistentCache.plainLyrics(for: query.cacheKey, provider: provider) {
                     return LyricFetchResult(provider: provider, payload: .plain(cachedLyrics))
+                }
+            case .embedded:
+                if let lines = EmbeddedLyricsLibrary.plainLyrics(for: query) {
+                    await persistentCache.storePlainLyrics(lines, for: query.cacheKey, provider: provider)
+                    return LyricFetchResult(provider: provider, payload: .plain(lines))
                 }
             case .lyricsOvh:
                 if let cachedLyrics = await persistentCache.plainLyrics(for: query.cacheKey, provider: provider) {
