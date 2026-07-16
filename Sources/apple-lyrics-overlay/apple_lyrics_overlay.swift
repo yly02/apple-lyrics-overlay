@@ -1219,8 +1219,15 @@ private enum LaunchAgentHelper {
 
         quit_overlay() {
           /usr/bin/osascript -e "tell application id \\"$bundleID\\" to quit" >/dev/null 2>&1
-          /bin/sleep 1
-          /usr/bin/pkill -x "AppleMusicLyrics" >/dev/null 2>&1 || true
+          for _ in 1 2 3 4 5 6 7 8 9 10; do
+            if ! /usr/bin/pgrep -x "AppleMusicLyrics" >/dev/null 2>&1; then
+              break
+            fi
+            /bin/sleep 0.2
+          done
+          if /usr/bin/pgrep -x "AppleMusicLyrics" >/dev/null 2>&1; then
+            /usr/bin/pkill -x "AppleMusicLyrics" >/dev/null 2>&1 || true
+          fi
           /usr/bin/pkill -x "AppleMusicLyricsMenu" >/dev/null 2>&1 || true
         }
 
@@ -1884,6 +1891,8 @@ private struct StoredWindowPosition: Codable, Equatable {
     let screenIdentifier: String?
     let relativeCenterX: Double
     let relativeMinY: Double
+    let absoluteCenterX: Double?
+    let absoluteMinY: Double?
 }
 
 private struct LegacyStoredWindowPosition: Codable {
@@ -2075,11 +2084,19 @@ private final class OverlaySettings: ObservableObject {
         useGradient = false
     }
 
-    func saveWindowPosition(screenIdentifier: String?, relativeCenterX: CGFloat, relativeMinY: CGFloat) {
+    func saveWindowPosition(
+        screenIdentifier: String?,
+        relativeCenterX: CGFloat,
+        relativeMinY: CGFloat,
+        absoluteCenterX: CGFloat,
+        absoluteMinY: CGFloat
+    ) {
         let position = StoredWindowPosition(
             screenIdentifier: screenIdentifier,
             relativeCenterX: Double(relativeCenterX),
-            relativeMinY: Double(relativeMinY)
+            relativeMinY: Double(relativeMinY),
+            absoluteCenterX: Double(absoluteCenterX),
+            absoluteMinY: Double(absoluteMinY)
         )
         guard let data = try? JSONEncoder().encode(position) else {
             return
@@ -2104,7 +2121,9 @@ private final class OverlaySettings: ObservableObject {
             return StoredWindowPosition(
                 screenIdentifier: nil,
                 relativeCenterX: legacyPosition.centerX,
-                relativeMinY: legacyPosition.minY
+                relativeMinY: legacyPosition.minY,
+                absoluteCenterX: legacyPosition.centerX,
+                absoluteMinY: legacyPosition.minY
             )
         }
 
@@ -4328,6 +4347,7 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelega
     private var appliedContentWidth: CGFloat?
     private var statusItemMonitorTimer: Timer?
     private var lockedOverlayContextMonitor: Any?
+    private var hasCompletedInitialWindowPlacement = false
     private lazy var model = OverlayViewModel()
     private lazy var settings = OverlaySettings()
     private lazy var translationSettingsModel = TranslationSettingsPanelModel()
@@ -4378,6 +4398,18 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelega
     }
 
     private func restoredFrame(from position: StoredWindowPosition, width: CGFloat, height: CGFloat) -> NSRect? {
+        if let absoluteFrame = absoluteFrame(from: position, width: width, height: height) {
+            if let screenIdentifier = position.screenIdentifier,
+               let screen = screen(matching: screenIdentifier)
+            {
+                return clampedFrame(absoluteFrame, inside: screen.visibleFrame)
+            }
+
+            if let screen = screenIntersecting(absoluteFrame) {
+                return clampedFrame(absoluteFrame, inside: screen.visibleFrame)
+            }
+        }
+
         if let screenIdentifier = position.screenIdentifier,
            let screen = screen(matching: screenIdentifier)
         {
@@ -4416,6 +4448,22 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelega
         return clampedFrame(frame, inside: visibleFrame)
     }
 
+    private func absoluteFrame(from position: StoredWindowPosition, width: CGFloat, height: CGFloat) -> NSRect? {
+        guard
+            let absoluteCenterX = position.absoluteCenterX,
+            let absoluteMinY = position.absoluteMinY
+        else {
+            return nil
+        }
+
+        return NSRect(
+            x: CGFloat(absoluteCenterX) - (width / 2),
+            y: CGFloat(absoluteMinY),
+            width: width,
+            height: height
+        )
+    }
+
     private func screen(matching identifier: String) -> NSScreen? {
         NSScreen.screens.first { screenIdentifier(for: $0) == identifier }
     }
@@ -4437,6 +4485,19 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelega
         return NSScreen.screens.max { lhs, rhs in
             intersectionArea(lhs.visibleFrame, frame) < intersectionArea(rhs.visibleFrame, frame)
         }
+    }
+
+    private func screenIntersecting(_ frame: NSRect) -> NSScreen? {
+        let center = CGPoint(x: frame.midX, y: frame.midY)
+        if let containingScreen = NSScreen.screens.first(where: { $0.visibleFrame.contains(center) }) {
+            return containingScreen
+        }
+
+        return NSScreen.screens
+            .filter { intersectionArea($0.visibleFrame, frame) > 0 }
+            .max { lhs, rhs in
+                intersectionArea(lhs.visibleFrame, frame) < intersectionArea(rhs.visibleFrame, frame)
+            }
     }
 
     private func intersectionArea(_ lhs: NSRect, _ rhs: NSRect) -> CGFloat {
@@ -4934,6 +4995,10 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelega
     }
 
     func windowDidMove(_ notification: Notification) {
+        guard hasCompletedInitialWindowPlacement else {
+            return
+        }
+
         persistWindowPosition()
     }
 
@@ -4957,7 +5022,9 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelega
         settings.saveWindowPosition(
             screenIdentifier: screenIdentifier(for: screen),
             relativeCenterX: min(max(relativeCenterX, 0), 1),
-            relativeMinY: min(max(relativeMinY, 0), 1)
+            relativeMinY: min(max(relativeMinY, 0), 1),
+            absoluteCenterX: window.frame.midX,
+            absoluteMinY: window.frame.minY
         )
     }
 
@@ -5203,7 +5270,11 @@ private final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelega
                 self.appliedContentWidth = width
                 let newFrame = self.frame(for: metrics, contentWidth: width, preserving: window)
                 window.setFrame(newFrame, display: true, animate: shouldAnimate)
-                self.persistWindowPosition()
+                if self.hasCompletedInitialWindowPlacement {
+                    self.persistWindowPosition()
+                } else {
+                    self.hasCompletedInitialWindowPlacement = true
+                }
             }
 
             if immediate || !animated || self.appliedContentWidth == nil {
