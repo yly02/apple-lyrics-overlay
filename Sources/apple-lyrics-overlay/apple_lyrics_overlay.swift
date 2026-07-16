@@ -342,6 +342,28 @@ private func normalizedTranslationText(_ text: String) -> String {
     return normalized
 }
 
+private func simplifiedChineseDisplayText(_ text: String) -> String {
+    guard text.range(of: #"\p{Han}"#, options: .regularExpression) != nil else {
+        return text
+    }
+
+    var simplified = text.applyingTransform(StringTransform(rawValue: "Traditional-Simplified"), reverse: false) ?? text
+
+    let variantRewrites: [(String, String)] = [
+        ("妳", "你"),
+        ("祢", "你"),
+        ("牠", "它"),
+        ("喺", "在"),
+        ("嘅", "的"),
+    ]
+
+    for (source, replacement) in variantRewrites {
+        simplified = simplified.replacingOccurrences(of: source, with: replacement)
+    }
+
+    return simplified
+}
+
 private func polishedLyricTranslation(_ translatedText: String, sourceText: String) -> String {
     let sourceTrimmed = sourceText.trimmingCharacters(in: .whitespacesAndNewlines)
     var polished = normalizedTranslationText(translatedText)
@@ -1051,10 +1073,8 @@ private actor TranslationFallbackClient {
             return nil
         }
 
-        guard
-            let converted = text.applyingTransform(StringTransform(rawValue: "Traditional-Simplified"), reverse: false),
-            converted != text
-        else {
+        let converted = simplifiedChineseDisplayText(text)
+        guard converted != text else {
             return nil
         }
 
@@ -2056,13 +2076,17 @@ private final class OverlaySettings: ObservableObject {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard
             !trimmed.isEmpty,
-            trimmed.range(of: #"\p{Han}"#, options: .regularExpression) != nil,
-            let converted = trimmed.applyingTransform(chineseDisplayMode.transform, reverse: false)
+            trimmed.range(of: #"\p{Han}"#, options: .regularExpression) != nil
         else {
             return text
         }
 
-        return converted
+        switch chineseDisplayMode {
+        case .simplified:
+            return simplifiedChineseDisplayText(text)
+        case .traditional:
+            return text.applyingTransform(chineseDisplayMode.transform, reverse: false) ?? text
+        }
     }
 
     func displayPrimaryLyric(_ text: String) -> String {
