@@ -257,6 +257,11 @@ private struct LyricFetchResult {
     let payload: LyricsPayload
 }
 
+private struct CachedLyricFetchResult {
+    let result: LyricFetchResult
+    let fetchedAt: Date
+}
+
 private struct PersistentLyricsCacheEntry: Codable {
     let providerRawValue: String
     let plainLines: [String]
@@ -312,19 +317,9 @@ private enum EmbeddedLyricsLibrary {
 
     static func plainLyrics(for query: LyricLookupQuery) -> [String]? {
         entries.first { entry in
-            metadataMatches(entry.title, query.title)
-                && entry.artists.contains { metadataMatches($0, query.artist) }
+            metadataKey(entry.title) == metadataKey(query.title)
+                && entry.artists.contains { metadataKey($0) == metadataKey(query.artist) }
         }?.plainLines
-    }
-
-    private static func metadataMatches(_ lhs: String, _ rhs: String) -> Bool {
-        let left = metadataKey(lhs)
-        let right = metadataKey(rhs)
-        guard !left.isEmpty, !right.isEmpty else {
-            return false
-        }
-
-        return left == right || left.contains(right) || right.contains(left)
     }
 
     private static func metadataKey(_ value: String) -> String {
@@ -2483,11 +2478,12 @@ private actor MusicClient {
 private actor LyricsClient {
     private let decoder = JSONDecoder()
     private let providers = LyricsProviderKind.allCases
-    private var cache: [String: LyricFetchResult] = [:]
+    private var cache: [String: CachedLyricFetchResult] = [:]
     private let persistentCache = LyricsPersistentCache.shared
     private let minimumLRCLibCandidateScore = 8.5
     private let minimumLRCGCCandidateScore = 7.0
     private let minimumCorrectedCoverage = 0.22
+    private let plainLyricsRetryInterval: TimeInterval = 8
 
     func lyrics(for snapshot: MusicSnapshot, localLyrics: String?) async throws -> LyricsPayload {
         let localPlainLyrics = localLyrics.flatMap { lyrics in
@@ -2495,61 +2491,88 @@ private actor LyricsClient {
             return parsed.isEmpty ? nil : parsed
         }
 
-        for query in LyricLookupQuery(snapshot: snapshot).candidateQueries() {
+        let queries = LyricLookupQuery(snapshot: snapshot).candidateQueries()
+        let now = Date()
+        var cachedPlainResult: LyricFetchResult?
+
+        for query in queries {
             if let cached = cache[query.cacheKey] {
-                return cached.payload
+                switch cached.result.payload {
+                case .synced:
+                    return cached.result.payload
+                case .plain:
+                    if now.timeIntervalSince(cached.fetchedAt) < plainLyricsRetryInterval {
+                        return cached.result.payload
+                    }
+                    cachedPlainResult = cached.result
+                case .none:
+                    break
+                }
             }
         }
 
-        for query in LyricLookupQuery(snapshot: snapshot).candidateQueries() {
-            if let fetched = try await fetchLyrics(for: query, snapshot: snapshot, localPlainLyrics: localPlainLyrics) {
-                cache[query.cacheKey] = fetched
+        for query in queries {
+            if let fetched = try await fetchSyncedLyrics(for: query, snapshot: snapshot, localPlainLyrics: localPlainLyrics) {
+                cache[query.cacheKey] = CachedLyricFetchResult(result: fetched, fetchedAt: now)
                 return fetched.payload
             }
+        }
+
+        for query in queries {
+            if let fetched = try await fetchPlainLyrics(for: query, localPlainLyrics: localPlainLyrics) {
+                cache[query.cacheKey] = CachedLyricFetchResult(result: fetched, fetchedAt: now)
+                return fetched.payload
+            }
+        }
+
+        if let cachedPlainResult {
+            return cachedPlainResult.payload
         }
 
         return .none
     }
 
-    private func fetchLyrics(
+    private func fetchSyncedLyrics(
         for query: LyricLookupQuery,
         snapshot: MusicSnapshot,
         localPlainLyrics: [String]?
     ) async throws -> LyricFetchResult? {
-        for provider in providers {
-            switch provider {
-            case .lrclib:
-                if let lines = try await fetchLRCLibLyrics(for: query, snapshot: snapshot, localPlainLyrics: localPlainLyrics) {
-                    return LyricFetchResult(provider: provider, payload: .synced(lines))
-                }
-            case .lrcgc:
-                if let lines = try await fetchLRCGCLyrics(for: query, snapshot: snapshot, localPlainLyrics: localPlainLyrics) {
-                    return LyricFetchResult(provider: provider, payload: .synced(lines))
-                }
-            case .musicLocal:
-                if let localPlainLyrics {
-                    await persistentCache.storePlainLyrics(localPlainLyrics, for: query.cacheKey, provider: provider)
-                    return LyricFetchResult(provider: provider, payload: .plain(localPlainLyrics))
-                }
+        if let lines = try await fetchLRCLibLyrics(for: query, snapshot: snapshot, localPlainLyrics: localPlainLyrics) {
+            return LyricFetchResult(provider: .lrclib, payload: .synced(lines))
+        }
 
-                if let cachedLyrics = await persistentCache.plainLyrics(for: query.cacheKey, provider: provider) {
-                    return LyricFetchResult(provider: provider, payload: .plain(cachedLyrics))
-                }
-            case .embedded:
-                if let lines = EmbeddedLyricsLibrary.plainLyrics(for: query) {
-                    await persistentCache.storePlainLyrics(lines, for: query.cacheKey, provider: provider)
-                    return LyricFetchResult(provider: provider, payload: .plain(lines))
-                }
-            case .lyricsOvh:
-                if let cachedLyrics = await persistentCache.plainLyrics(for: query.cacheKey, provider: provider) {
-                    return LyricFetchResult(provider: provider, payload: .plain(cachedLyrics))
-                }
+        if let lines = try await fetchLRCGCLyrics(for: query, snapshot: snapshot, localPlainLyrics: localPlainLyrics) {
+            return LyricFetchResult(provider: .lrcgc, payload: .synced(lines))
+        }
 
-                if let lines = try await fetchLyricsOVHPlainLyrics(for: query) {
-                    await persistentCache.storePlainLyrics(lines, for: query.cacheKey, provider: provider)
-                    return LyricFetchResult(provider: provider, payload: .plain(lines))
-                }
-            }
+        return nil
+    }
+
+    private func fetchPlainLyrics(
+        for query: LyricLookupQuery,
+        localPlainLyrics: [String]?
+    ) async throws -> LyricFetchResult? {
+        if let localPlainLyrics {
+            await persistentCache.storePlainLyrics(localPlainLyrics, for: query.cacheKey, provider: .musicLocal)
+            return LyricFetchResult(provider: .musicLocal, payload: .plain(localPlainLyrics))
+        }
+
+        if let cachedLyrics = await persistentCache.plainLyrics(for: query.cacheKey, provider: .musicLocal) {
+            return LyricFetchResult(provider: .musicLocal, payload: .plain(cachedLyrics))
+        }
+
+        if let lines = EmbeddedLyricsLibrary.plainLyrics(for: query) {
+            await persistentCache.storePlainLyrics(lines, for: query.cacheKey, provider: .embedded)
+            return LyricFetchResult(provider: .embedded, payload: .plain(lines))
+        }
+
+        if let cachedLyrics = await persistentCache.plainLyrics(for: query.cacheKey, provider: .lyricsOvh) {
+            return LyricFetchResult(provider: .lyricsOvh, payload: .plain(cachedLyrics))
+        }
+
+        if let lines = try await fetchLyricsOVHPlainLyrics(for: query) {
+            await persistentCache.storePlainLyrics(lines, for: query.cacheKey, provider: .lyricsOvh)
+            return LyricFetchResult(provider: .lyricsOvh, payload: .plain(lines))
         }
 
         return nil
